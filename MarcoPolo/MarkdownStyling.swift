@@ -16,7 +16,8 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
 
     private var baseParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 6
+        style.lineSpacing = 8
+        style.paragraphSpacing = 12
         style.headIndent = textMargin
         style.firstLineHeadIndent = textMargin
         style.tailIndent = -textMargin
