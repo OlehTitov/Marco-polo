@@ -14,25 +14,22 @@ final class EditorTextView: NSTextView {
     func centerSelectionIfNeeded(animated: Bool) {
         guard let scrollView = enclosingScrollView,
               let clipView = scrollView.contentView as NSClipView?,
-              let layoutManager,
-              let textContainer else {
+              let tlm = textLayoutManager else {
             return
         }
 
         let selectedRange = selectedRange()
-        let glyphRange = layoutManager.glyphRange(forCharacterRange: selectedRange, actualCharacterRange: nil)
-        var rect = layoutManager.boundingRect(forGlyphRange: glyphRange, in: textContainer)
+        let rect = cursorRect(for: selectedRange, using: tlm)
+            ?? insertionPointFallbackRect(for: selectedRange, using: tlm)
+            ?? .zero
 
-        if rect.isEmpty {
-            let fallbackGlyph = max(0, min(layoutManager.numberOfGlyphs - 1, glyphRange.location))
-            rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: fallbackGlyph, length: 1), in: textContainer)
-        }
+        guard rect != .zero else { return }
 
         let insetRect = rect.offsetBy(dx: textContainerInset.width, dy: textContainerInset.height)
         let clipBounds = clipView.bounds
-        let targetY = max(-contentInsets.top, insetRect.midY - (clipBounds.height / 2.0))
-        let maxY = max(-contentInsets.top, bounds.height - clipBounds.height + contentInsets.bottom)
-        let constrainedY = min(max(targetY, -contentInsets.top), maxY)
+        let targetY = max(-scrollView.contentInsets.top, insetRect.midY - (clipBounds.height / 2.0))
+        let maxY = max(-scrollView.contentInsets.top, bounds.height - clipBounds.height + scrollView.contentInsets.bottom)
+        let constrainedY = min(max(targetY, -scrollView.contentInsets.top), maxY)
         let targetOrigin = NSPoint(x: clipBounds.origin.x, y: constrainedY)
 
         if animated {
@@ -42,5 +39,43 @@ final class EditorTextView: NSTextView {
         }
 
         scrollView.reflectScrolledClipView(clipView)
+    }
+
+    // MARK: - TextKit 2 Cursor Geometry
+
+    private func cursorRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
+        guard let contentManager = tlm.textContentManager,
+              let start = contentManager.location(contentManager.documentRange.location, offsetBy: nsRange.location),
+              let end = contentManager.location(start, offsetBy: max(nsRange.length, 1)) else {
+            return nil
+        }
+
+        guard let textRange = NSTextRange(location: start, end: end) else { return nil }
+        var result: NSRect?
+
+        tlm.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, segmentFrame, _, _ in
+            if let current = result {
+                result = current.union(segmentFrame)
+            } else {
+                result = segmentFrame
+            }
+            return true
+        }
+
+        return result
+    }
+
+    private func insertionPointFallbackRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
+        guard let contentManager = tlm.textContentManager else { return nil }
+
+        guard let location = contentManager.location(contentManager.documentRange.location, offsetBy: nsRange.location) else {
+            return nil
+        }
+
+        if let fragment = tlm.textLayoutFragment(for: location) {
+            return fragment.layoutFragmentFrame
+        }
+
+        return nil
     }
 }

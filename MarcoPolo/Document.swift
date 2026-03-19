@@ -2,8 +2,10 @@ import AppKit
 import UniformTypeIdentifiers
 
 final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
-    private let textStorage = MarkdownTextStorage()
+    private let markdownStyling = MarkdownStyling()
+    private let textContentStorage = NSTextContentStorage()
     private var textView: EditorTextView?
+    private var pendingContent: String?
 
     override init() {
         super.init()
@@ -15,11 +17,11 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     }
 
     override class var readableTypes: [String] {
-        [UTType.markdown.identifier, UTType.plainText.identifier]
+        ["net.daringfireball.markdown", UTType.plainText.identifier]
     }
 
     override class var writableTypes: [String] {
-        [UTType.markdown.identifier, UTType.plainText.identifier]
+        ["net.daringfireball.markdown", UTType.plainText.identifier]
     }
 
     override func makeWindowControllers() {
@@ -37,6 +39,16 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         window.tabbingMode = .disallowed
 
         let contentSize = window.contentLayoutRect.size
+
+        // TextKit 2 stack
+        let textLayoutManager = NSTextLayoutManager()
+        textContentStorage.delegate = markdownStyling
+        textContentStorage.addTextLayoutManager(textLayoutManager)
+
+        let container = NSTextContainer(size: NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        textLayoutManager.textContainer = container
+
         let scrollView = NSScrollView(frame: NSRect(origin: .zero, size: contentSize))
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         scrollView.borderType = .noBorder
@@ -46,12 +58,6 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
         scrollView.scrollerStyle = .overlay
-
-        let container = NSTextContainer(size: NSSize(width: contentSize.width, height: .greatestFiniteMagnitude))
-        container.widthTracksTextView = true
-        let layoutManager = NSLayoutManager()
-        layoutManager.addTextContainer(container)
-        textStorage.addLayoutManager(layoutManager)
 
         let editor = EditorTextView(frame: scrollView.bounds, textContainer: container)
         editor.isRichText = false
@@ -65,7 +71,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         editor.usesFindBar = true
         editor.allowsUndo = true
         editor.minSize = NSSize(width: 0, height: contentSize.height)
-        editor.maxSize = NSSize(width: .greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        editor.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false
         editor.autoresizingMask = [.width]
@@ -94,12 +100,18 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         let controller = NSWindowController(window: window)
         addWindowController(controller)
         textView = editor
-        editor.string = textStorage.string
+
+        if let pending = pendingContent {
+            editor.string = pending
+            pendingContent = nil
+        }
+
         editor.centerSelectionIfNeeded(animated: false)
     }
 
     override func data(ofType typeName: String) throws -> Data {
-        (textView?.string ?? textStorage.string).data(using: .utf8) ?? Data()
+        let text = textView?.string ?? textContentStorage.textStorage?.string ?? ""
+        return text.data(using: .utf8) ?? Data()
     }
 
     override func read(from data: Data, ofType typeName: String) throws {
@@ -122,7 +134,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         if let textView {
             textView.string = string
         } else {
-            textStorage.replaceCharacters(in: NSRange(location: 0, length: textStorage.length), with: string)
+            pendingContent = string
         }
     }
 }
