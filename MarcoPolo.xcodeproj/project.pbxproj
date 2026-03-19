@@ -11,6 +11,13 @@
 		A00000000000000000000013 /* MarkdownStyling.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* MarkdownStyling.swift */; };
 		A00000000000000000000014 /* EditorTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000004 /* EditorTextView.swift */; };
 		A00000000000000000000015 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* main.swift */; };
+		A00000000000000000000016 /* Preferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000101 /* Preferences.swift */; };
+		A00000000000000000000017 /* MarkdownPatterns.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000102 /* MarkdownPatterns.swift */; };
+		A00000000000000000000018 /* FencedCodeTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000103 /* FencedCodeTracker.swift */; };
+		A00000000000000000000019 /* FormattingCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000104 /* FormattingCommands.swift */; };
+		A0000000000000000000001A /* OutlineSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000105 /* OutlineSidebar.swift */; };
+		A0000000000000000000001B /* StatusBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000106 /* StatusBarView.swift */; };
+		A0000000000000000000001C /* MarkdownExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000107 /* MarkdownExporter.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,6 +29,13 @@
 		A00000000000000000000006 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A00000000000000000000007 /* MarcoPolo.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MarcoPolo.entitlements; sourceTree = "<group>"; };
 		A00000000000000000000008 /* MarcoPolo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MarcoPolo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000101 /* Preferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Preferences.swift; sourceTree = "<group>"; };
+		A00000000000000000000102 /* MarkdownPatterns.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPatterns.swift; sourceTree = "<group>"; };
+		A00000000000000000000103 /* FencedCodeTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FencedCodeTracker.swift; sourceTree = "<group>"; };
+		A00000000000000000000104 /* FormattingCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FormattingCommands.swift; sourceTree = "<group>"; };
+		A00000000000000000000105 /* OutlineSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OutlineSidebar.swift; sourceTree = "<group>"; };
+		A00000000000000000000106 /* StatusBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusBarView.swift; sourceTree = "<group>"; };
+		A00000000000000000000107 /* MarkdownExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownExporter.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -48,8 +62,15 @@
 			children = (
 				A00000000000000000000001 /* AppDelegate.swift */,
 				A00000000000000000000002 /* Document.swift */,
-				A00000000000000000000003 /* MarkdownStyling.swift */,
 				A00000000000000000000004 /* EditorTextView.swift */,
+				A00000000000000000000103 /* FencedCodeTracker.swift */,
+				A00000000000000000000104 /* FormattingCommands.swift */,
+				A00000000000000000000107 /* MarkdownExporter.swift */,
+				A00000000000000000000102 /* MarkdownPatterns.swift */,
+				A00000000000000000000003 /* MarkdownStyling.swift */,
+				A00000000000000000000105 /* OutlineSidebar.swift */,
+				A00000000000000000000101 /* Preferences.swift */,
+				A00000000000000000000106 /* StatusBarView.swift */,
 				A00000000000000000000005 /* main.swift */,
 				A00000000000000000000006 /* Info.plist */,
 				A00000000000000000000007 /* MarcoPolo.entitlements */,
@@ -135,8 +156,15 @@
 			files = (
 				A00000000000000000000011 /* AppDelegate.swift in Sources */,
 				A00000000000000000000012 /* Document.swift in Sources */,
-				A00000000000000000000013 /* MarkdownStyling.swift in Sources */,
 				A00000000000000000000014 /* EditorTextView.swift in Sources */,
+				A00000000000000000000018 /* FencedCodeTracker.swift in Sources */,
+				A00000000000000000000019 /* FormattingCommands.swift in Sources */,
+				A0000000000000000000001C /* MarkdownExporter.swift in Sources */,
+				A00000000000000000000017 /* MarkdownPatterns.swift in Sources */,
+				A00000000000000000000013 /* MarkdownStyling.swift in Sources */,
+				A0000000000000000000001A /* OutlineSidebar.swift in Sources */,
+				A00000000000000000000016 /* Preferences.swift in Sources */,
+				A0000000000000000000001B /* StatusBarView.swift in Sources */,
 				A00000000000000000000015 /* main.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

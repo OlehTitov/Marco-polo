@@ -3,18 +3,40 @@ import UniformTypeIdentifiers
 
 final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private let markdownStyling = MarkdownStyling()
+    private let fencedCodeTracker = FencedCodeTracker()
     private let textContentStorage = NSTextContentStorage()
     private var textView: EditorTextView?
     private var pendingContent: String?
 
+    // UI components
+    private var scrollView: NSScrollView?
+    private var outlineSidebar: OutlineSidebar?
+    private var statusBarView: StatusBarView?
+    private var containerView: NSView?
+
+    // Layout constraints for toggling
+    private var scrollViewBottomConstraint: NSLayoutConstraint?
+    private var sidebarWidthConstraint: NSLayoutConstraint?
+    private var statusBarHeightConstraint: NSLayoutConstraint?
+
+    // State
+    private var isSidebarVisible = false
+    private var isStatusBarVisible = false
+    private var selectionObserver: NSObjectProtocol?
+    private var prefsObserver: NSObjectProtocol?
+
     override init() {
         super.init()
         hasUndoManager = true
+        markdownStyling.fencedCodeTracker = fencedCodeTracker
     }
 
-    override class var autosavesInPlace: Bool {
-        true
+    deinit {
+        if let obs = selectionObserver { NotificationCenter.default.removeObserver(obs) }
+        if let obs = prefsObserver { NotificationCenter.default.removeObserver(obs) }
     }
+
+    override class var autosavesInPlace: Bool { true }
 
     override class var readableTypes: [String] {
         ["net.daringfireball.markdown", UTType.plainText.identifier]
@@ -24,10 +46,12 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         ["net.daringfireball.markdown", UTType.plainText.identifier]
     }
 
+    // MARK: - Window setup
+
     override func makeWindowControllers() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 860, height: 680),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -37,6 +61,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         window.center()
         window.delegate = self
         window.tabbingMode = .disallowed
+        window.setFrameAutosaveName("DocumentWindow")
 
         let contentSize = window.contentLayoutRect.size
 
@@ -49,17 +74,21 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         container.widthTracksTextView = true
         textLayoutManager.textContainer = container
 
-        let scrollView = NSScrollView(frame: NSRect(origin: .zero, size: contentSize))
-        scrollView.translatesAutoresizingMaskIntoConstraints = false
-        scrollView.borderType = .noBorder
-        scrollView.drawsBackground = true
-        scrollView.backgroundColor = .textBackgroundColor
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = false
-        scrollView.autohidesScrollers = true
-        scrollView.scrollerStyle = .overlay
+        // Scroll view
+        let sv = NSScrollView(frame: NSRect(origin: .zero, size: contentSize))
+        sv.translatesAutoresizingMaskIntoConstraints = false
+        sv.borderType = .noBorder
+        sv.drawsBackground = true
+        sv.backgroundColor = .textBackgroundColor
+        sv.hasVerticalScroller = true
+        sv.hasHorizontalScroller = false
+        sv.autohidesScrollers = true
+        sv.scrollerStyle = .overlay
+        scrollView = sv
 
-        let editor = EditorTextView(frame: scrollView.bounds, textContainer: container)
+        // Editor
+        let prefs = Preferences.shared
+        let editor = EditorTextView(frame: sv.bounds, textContainer: container)
         editor.isRichText = false
         editor.importsGraphics = false
         editor.isAutomaticQuoteSubstitutionEnabled = false
@@ -78,23 +107,65 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         editor.backgroundColor = .textBackgroundColor
         editor.insertionPointColor = .textColor
         editor.textColor = .textColor
-        editor.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
-        editor.textContainerInset = NSSize(width: 0, height: max(140, contentSize.height * 0.35))
+        editor.font = prefs.font
+        editor.textContainerInset = NSSize(width: 80, height: max(140, contentSize.height * 0.35)) // width updated in updateTextInsets
         editor.textContainer?.lineFragmentPadding = 0
         editor.delegate = self
+        sv.documentView = editor
 
-        scrollView.documentView = editor
+        // Container view
+        let cv = NSView()
+        cv.translatesAutoresizingMaskIntoConstraints = false
+        window.contentView = cv
+        containerView = cv
 
-        let containerView = NSView()
-        containerView.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView = containerView
-        containerView.addSubview(scrollView)
+        // Outline sidebar
+        let sidebar = OutlineSidebar(frame: .zero)
+        sidebar.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.isHidden = true
+        sidebar.onSelectHeading = { [weak self] location in
+            self?.jumpToLocation(location)
+        }
+        outlineSidebar = sidebar
+        cv.addSubview(sidebar)
+
+        // Status bar
+        let statusBar = StatusBarView(frame: .zero)
+        statusBar.translatesAutoresizingMaskIntoConstraints = false
+        statusBar.isHidden = true
+        statusBarView = statusBar
+        cv.addSubview(statusBar)
+
+        cv.addSubview(sv)
+
+        // Constraints
+        let sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 0)
+        sidebarWidthConstraint = sidebarWidth
+
+        let statusHeight = statusBar.heightAnchor.constraint(equalToConstant: 0)
+        statusBarHeightConstraint = statusHeight
+
+        let scrollBottom = sv.bottomAnchor.constraint(equalTo: statusBar.topAnchor)
+        scrollViewBottomConstraint = scrollBottom
 
         NSLayoutConstraint.activate([
-            scrollView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor, constant: 72),
-            scrollView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor, constant: -72),
-            scrollView.topAnchor.constraint(equalTo: containerView.topAnchor, constant: 0),
-            scrollView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor, constant: 0)
+            // Sidebar
+            sidebar.topAnchor.constraint(equalTo: cv.topAnchor),
+            sidebar.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
+            sidebar.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            sidebarWidth,
+
+            // Scroll view — leading follows sidebar, fills to trailing
+            sv.leadingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            sv.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            sv.topAnchor.constraint(equalTo: cv.topAnchor),
+            scrollBottom,
+
+            // Status bar
+            statusBar.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
+            statusBar.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
+            statusBar.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
+            statusHeight
         ])
 
         let controller = NSWindowController(window: window)
@@ -106,8 +177,36 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
             pendingContent = nil
         }
 
+        // Initial state
+        rebuildFenceTracker()
+        outlineSidebar?.rebuildOutline(from: editor.string)
+        if isStatusBarVisible {
+            statusBarView?.updateCounts(text: editor.string)
+        }
+
+        updateTextInsets()
         editor.centerSelectionIfNeeded(animated: false)
+
+        // Observe selection changes for focus mode
+        selectionObserver = NotificationCenter.default.addObserver(
+            forName: NSNotification.Name("EditorSelectionDidChange"),
+            object: editor,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleSelectionChange()
+        }
+
+        // Observe preferences changes
+        prefsObserver = NotificationCenter.default.addObserver(
+            forName: Preferences.didChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.applyPreferences()
+        }
     }
+
+    // MARK: - File I/O
 
     override func data(ofType typeName: String) throws -> Data {
         let text = textView?.string ?? textContentStorage.textStorage?.string ?? ""
@@ -119,22 +218,223 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         replaceContent(with: decoded)
     }
 
+    // MARK: - Text delegate
+
     func textDidChange(_ notification: Notification) {
         updateChangeCount(.changeDone)
+        rebuildFenceTracker()
+        if isSidebarVisible, let text = textView?.string {
+            outlineSidebar?.scheduleRebuild(from: text)
+        }
+        if isStatusBarVisible, let text = textView?.string {
+            statusBarView?.updateCounts(text: text)
+        }
     }
+
+    // MARK: - Window delegate
 
     func windowDidResize(_ notification: Notification) {
         guard let textView else { return }
         let visibleHeight = textView.enclosingScrollView?.contentSize.height ?? 0
         textView.textContainerInset.height = max(140, visibleHeight * 0.35)
-        textView.centerSelectionIfNeeded(animated: false)
+        updateTextInsets()
+        if Preferences.shared.isTypewriterScrollEnabled {
+            textView.centerSelectionIfNeeded(animated: false)
+        }
     }
+
+    private func updateTextInsets() {
+        guard let textView, let scrollView else { return }
+        let availableWidth = scrollView.contentSize.width
+        let screenWidth = textView.window?.screen?.frame.width ?? NSScreen.main?.frame.width ?? 1440
+        let maxContentWidth = screenWidth / 2
+        let minInset: CGFloat = 48
+        let inset = max(minInset, (availableWidth - maxContentWidth) / 2)
+        textView.textContainerInset.width = inset
+    }
+
+    // MARK: - Focus mode
+
+    @objc func toggleFocusMode(_ sender: Any?) {
+        markdownStyling.isFocusModeEnabled.toggle()
+        if markdownStyling.isFocusModeEnabled {
+            handleSelectionChange()
+        } else {
+            markdownStyling.focusedParagraphLocation = nil
+        }
+        invalidateAllParagraphs()
+    }
+
+    private func handleSelectionChange() {
+        guard markdownStyling.isFocusModeEnabled, let textView, let ts = textContentStorage.textStorage else { return }
+        let sel = textView.selectedRange()
+        let str = ts.string as NSString
+        guard sel.location <= str.length else { return }
+        let paraRange = str.paragraphRange(for: NSRange(location: sel.location, length: 0))
+        let newLoc = paraRange.location
+        if newLoc != markdownStyling.focusedParagraphLocation {
+            markdownStyling.focusedParagraphLocation = newLoc
+            invalidateAllParagraphs()
+        }
+    }
+
+    // MARK: - Outline sidebar
+
+    @objc func toggleOutlineSidebar(_ sender: Any?) {
+        isSidebarVisible.toggle()
+
+        if isSidebarVisible {
+            outlineSidebar?.isHidden = false
+            if let text = textView?.string {
+                outlineSidebar?.rebuildOutline(from: text)
+            }
+        }
+
+        sidebarWidthConstraint?.constant = isSidebarVisible ? 220 : 0
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            containerView?.layoutSubtreeIfNeeded()
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            if !self.isSidebarVisible {
+                self.outlineSidebar?.isHidden = true
+            }
+        })
+    }
+
+    // MARK: - Status bar
+
+    @objc func toggleStatusBar(_ sender: Any?) {
+        isStatusBarVisible.toggle()
+
+        if isStatusBarVisible {
+            statusBarView?.isHidden = false
+            if let text = textView?.string {
+                statusBarView?.updateCounts(text: text)
+            }
+        }
+
+        statusBarHeightConstraint?.constant = isStatusBarVisible ? 20 : 0
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            context.allowsImplicitAnimation = true
+            containerView?.layoutSubtreeIfNeeded()
+        }, completionHandler: { [weak self] in
+            guard let self else { return }
+            if !self.isStatusBarVisible {
+                self.statusBarView?.isHidden = true
+            }
+        })
+    }
+
+    // MARK: - Typewriter scroll toggle
+
+    @objc func toggleTypewriterScroll(_ sender: Any?) {
+        Preferences.shared.isTypewriterScrollEnabled.toggle()
+    }
+
+    override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleTypewriterScroll(_:)) {
+            menuItem.state = Preferences.shared.isTypewriterScrollEnabled ? .on : .off
+            return true
+        }
+        if menuItem.action == #selector(toggleFocusMode(_:)) {
+            menuItem.state = markdownStyling.isFocusModeEnabled ? .on : .off
+            return true
+        }
+        if menuItem.action == #selector(toggleOutlineSidebar(_:)) {
+            menuItem.state = isSidebarVisible ? .on : .off
+            return true
+        }
+        if menuItem.action == #selector(toggleStatusBar(_:)) {
+            menuItem.state = isStatusBarVisible ? .on : .off
+            return true
+        }
+        return super.validateMenuItem(menuItem)
+    }
+
+    // MARK: - Font size
+
+    @objc func increaseFontSize(_ sender: Any?) {
+        let prefs = Preferences.shared
+        prefs.fontSize = min(prefs.fontSize + 1, 48)
+    }
+
+    @objc func decreaseFontSize(_ sender: Any?) {
+        let prefs = Preferences.shared
+        prefs.fontSize = max(prefs.fontSize - 1, 8)
+    }
+
+    // MARK: - Export
+
+    @objc func exportHTML(_ sender: Any?) {
+        guard let text = textView?.string else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType.html]
+        panel.nameFieldStringValue = (displayName ?? "Untitled") + ".html"
+        panel.beginSheetModal(for: windowControllers.first!.window!) { response in
+            guard response == .OK, let url = panel.url else { return }
+            let html = MarkdownExporter.toHTML(text)
+            try? html.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    @objc func exportPDF(_ sender: Any?) {
+        guard let text = textView?.string else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType.pdf]
+        panel.nameFieldStringValue = (displayName ?? "Untitled") + ".pdf"
+        panel.beginSheetModal(for: windowControllers.first!.window!) { response in
+            guard response == .OK, let url = panel.url else { return }
+            if let data = MarkdownExporter.toPDF(text) {
+                try? data.write(to: url)
+            }
+        }
+    }
+
+    // MARK: - Preferences changes
+
+    private func applyPreferences() {
+        guard let textView else { return }
+        let prefs = Preferences.shared
+        textView.font = prefs.font
+        invalidateAllParagraphs()
+    }
+
+    // MARK: - Helpers
 
     private func replaceContent(with string: String) {
         if let textView {
             textView.string = string
+            rebuildFenceTracker()
+            outlineSidebar?.rebuildOutline(from: string)
         } else {
             pendingContent = string
+        }
+    }
+
+    private func rebuildFenceTracker() {
+        guard let ts = textContentStorage.textStorage else { return }
+        fencedCodeTracker.rebuild(from: ts)
+    }
+
+    private func invalidateAllParagraphs() {
+        guard let ts = textContentStorage.textStorage else { return }
+        textContentStorage.performEditingTransaction {
+            ts.edited(.editedAttributes, range: NSRange(location: 0, length: ts.length), changeInLength: 0)
+        }
+    }
+
+    private func jumpToLocation(_ location: Int) {
+        guard let textView else { return }
+        let range = NSRange(location: min(location, (textView.string as NSString).length), length: 0)
+        textView.setSelectedRange(range)
+        textView.scrollRangeToVisible(range)
+        if Preferences.shared.isTypewriterScrollEnabled {
+            textView.centerSelectionIfNeeded(animated: true)
         }
     }
 }

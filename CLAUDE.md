@@ -3,11 +3,18 @@
 ## What This Is
 A pure AppKit markdown editor for macOS. Lightweight, fast, distraction-free. For writing, not coding. Must feel instant on a 10-year-old Mac with a 50,000-line file open.
 
-## Architecture (288 lines total)
-- **MarkdownTextStorage** — NSTextStorage subclass, paragraph-level styling
-- **EditorTextView** — NSTextView subclass, typewriter scroll (cursor stays centered)
-- **Document** — NSDocument, NSLayoutManager + NSTextContainer, autosave, plain text I/O
-- **AppDelegate** — app lifecycle
+## Architecture (1924 lines total, 12 files)
+- **AppDelegate.swift** — app lifecycle + full NSMenu (File, Edit, Format, View, Window)
+- **Document.swift** — NSDocument, TextKit 2 stack, hosts sidebar + status bar, export, focus mode, preferences
+- **EditorTextView.swift** — NSTextView subclass, typewriter scroll, auto-pair, smart newline, indent/outdent
+- **FormattingCommands.swift** — extension on EditorTextView: toggle bold/italic/code/link, list continuation
+- **MarkdownStyling.swift** — NSTextContentStorageDelegate, full syntax highlighting, focus mode dimming
+- **MarkdownPatterns.swift** — static regex patterns, paragraph type detection, heading helpers
+- **FencedCodeTracker.swift** — cross-paragraph fenced code block state tracking
+- **OutlineSidebar.swift** — NSOutlineView heading tree, click-to-jump
+- **StatusBarView.swift** — word/character count bar
+- **MarkdownExporter.swift** — Markdown → HTML + PDF export
+- **Preferences.swift** — UserDefaults wrapper (font, size, typewriter toggle)
 - **main.swift** — entry point
 
 Pure AppKit + **TextKit 2**. No SwiftUI. No Electron. No web views.
