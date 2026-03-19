@@ -24,6 +24,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private var isStatusBarVisible = false
     private var selectionObserver: NSObjectProtocol?
     private var prefsObserver: NSObjectProtocol?
+    private var appearanceObserver: NSKeyValueObservation?
 
     override init() {
         super.init()
@@ -71,7 +72,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         textContentStorage.addTextLayoutManager(textLayoutManager)
 
         let container = NSTextContainer(size: NSSize(width: contentSize.width, height: CGFloat.greatestFiniteMagnitude))
-        container.widthTracksTextView = true
+        container.widthTracksTextView = false
         textLayoutManager.textContainer = container
 
         // Scroll view
@@ -171,6 +172,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         let controller = NSWindowController(window: window)
         addWindowController(controller)
         textView = editor
+        editor.fencedCodeTracker = fencedCodeTracker
 
         if let pending = pendingContent {
             editor.string = pending
@@ -186,6 +188,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
 
         updateTextInsets()
         editor.centerSelectionIfNeeded(animated: false)
+
 
         // Observe selection changes for focus mode
         selectionObserver = NotificationCenter.default.addObserver(
@@ -203,6 +206,13 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
             queue: .main
         ) { [weak self] _ in
             self?.applyPreferences()
+        }
+
+        // Observe appearance changes for code highlight theme switching
+        appearanceObserver = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
+            guard let self else { return }
+            self.markdownStyling.updateThemeIfNeeded()
+            self.invalidateAllParagraphs()
         }
     }
 
@@ -223,6 +233,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     func textDidChange(_ notification: Notification) {
         updateChangeCount(.changeDone)
         rebuildFenceTracker()
+        markdownStyling.clearHighlightCache()
         if isSidebarVisible, let text = textView?.string {
             outlineSidebar?.scheduleRebuild(from: text)
         }
@@ -251,6 +262,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         let minInset: CGFloat = 48
         let inset = max(minInset, (availableWidth - maxContentWidth) / 2)
         textView.textContainerInset.width = inset
+        textView.textContainer?.size.width = max(200, availableWidth - 2 * inset)
     }
 
     // MARK: - Focus mode

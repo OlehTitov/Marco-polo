@@ -1,22 +1,54 @@
 import AppKit
+import Highlightr
 
 final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
     var fencedCodeTracker: FencedCodeTracker?
     var isFocusModeEnabled = false
     var focusedParagraphLocation: Int?
 
-    /// Left/right paragraph indent — body text starts here, heading # signs hang to the left of it.
-    /// Sized to fit the widest prefix "###### " (7 monospace chars) so all levels trail-align.
-    private var textMargin: CGFloat {
-        let charWidth = ("#" as NSString).size(withAttributes: [.font: prefs.font]).width
-        return ceil(charWidth * 7)
+    // MARK: - Highlightr
+
+    private lazy var highlightr: Highlightr? = {
+        let h = Highlightr()
+        let theme = currentThemeName
+        h?.setTheme(to: theme)
+        self.appliedThemeName = theme
+        return h
+    }()
+
+    /// Cache keyed by open fence location → highlighted NSAttributedString of the full code block
+    private var highlightCache: [Int: NSAttributedString] = [:]
+    private var appliedThemeName: String?
+
+    private var currentThemeName: String {
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        return isDark ? "atom-one-dark" : "atom-one-light"
+    }
+
+    func clearHighlightCache() {
+        highlightCache.removeAll()
+    }
+
+    func updateThemeIfNeeded() {
+        let name = currentThemeName
+        guard name != appliedThemeName else { return }
+        highlightr?.setTheme(to: name)
+        appliedThemeName = name
+        clearHighlightCache()
     }
 
     private var prefs: Preferences { Preferences.shared }
 
+    /// Left/right paragraph indent — body text starts here, heading # signs hang to the left of it.
+    /// Sized to fit the widest prefix "###### " (7 monospace chars) so all levels trail-align.
+    var textMargin: CGFloat {
+        let charWidth = ("#" as NSString).size(withAttributes: [.font: prefs.font]).width
+        return ceil(charWidth * 7)
+    }
+
     private var baseParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 8
+        style.lineSpacing = 12
         style.paragraphSpacing = 12
         style.headIndent = textMargin
         style.firstLineHeadIndent = textMargin
@@ -52,11 +84,12 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         let element = MarkdownPatterns.paragraphType(for: line, isInFencedCode: isInFenced)
 
         // Apply block-level style
-        applyBlockStyle(element, to: styled, fullRange: fullRange, font: font, paraStyle: paraStyle)
+        applyBlockStyle(element, to: styled, fullRange: fullRange, font: font, paraStyle: paraStyle,
+                        documentRange: range, textStorage: textStorage)
 
         // Apply inline styles (skip inside fenced code body)
         switch element {
-        case .fencedCodeBody, .fencedCodeFence:
+        case .fencedCodeBody, .fencedCodeFence(_):
             break
         default:
             applyInlineStyles(to: styled, line: line, fullRange: fullRange, font: font)
@@ -80,7 +113,9 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         to styled: NSMutableAttributedString,
         fullRange: NSRange,
         font: NSFont,
-        paraStyle: NSParagraphStyle
+        paraStyle: NSParagraphStyle,
+        documentRange: NSRange,
+        textStorage: NSTextStorage
     ) {
         switch element {
         case .heading(let level):
@@ -115,16 +150,26 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
                 .paragraphStyle: bqStyle
             ], range: fullRange)
 
-        case .fencedCodeFence:
+        case .fencedCodeFence(_):
+            let fenceStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
+            fenceStyle.headIndent = textMargin + 20
+            fenceStyle.firstLineHeadIndent = textMargin + 20
+            fenceStyle.tailIndent = -(textMargin + 20)
+            fenceStyle.paragraphSpacingBefore = 24
+            fenceStyle.paragraphSpacing = 24
             styled.addAttributes([
-                .foregroundColor: NSColor.tertiaryLabelColor
+                .foregroundColor: NSColor.tertiaryLabelColor,
+                .paragraphStyle: fenceStyle
             ], range: fullRange)
 
         case .fencedCodeBody:
-            styled.addAttributes([
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .backgroundColor: NSColor.quaternaryLabelColor
-            ], range: fullRange)
+            let codeStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
+            codeStyle.headIndent = textMargin + 20
+            codeStyle.firstLineHeadIndent = textMargin + 20
+            codeStyle.tailIndent = -(textMargin + 20)
+            styled.addAttribute(.paragraphStyle, value: codeStyle, range: fullRange)
+            applyCodeHighlighting(to: styled, fullRange: fullRange, font: font,
+                                  documentRange: documentRange, textStorage: textStorage)
 
         case .orderedList(let indent), .unorderedList(let indent):
             let listStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
@@ -154,6 +199,70 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         }
     }
 
+    // MARK: - Code block highlighting
+
+    private func applyCodeHighlighting(
+        to styled: NSMutableAttributedString,
+        fullRange: NSRange,
+        font: NSFont,
+        documentRange: NSRange,
+        textStorage: NSTextStorage
+    ) {
+        guard let tracker = fencedCodeTracker,
+              let info = tracker.codeBlockInfo(forParagraphAt: documentRange.location),
+              info.codeRange.length > 0,
+              let highlightr else {
+            // Fall back to default grey
+            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            return
+        }
+
+        let cacheKey = info.openLocation
+
+        // Get or create cached highlighted string for the whole code block
+        if highlightCache[cacheKey] == nil {
+            let codeText = textStorage.attributedSubstring(from: info.codeRange).string
+            if let highlighted = highlightr.highlight(codeText, as: info.language) {
+                highlightCache[cacheKey] = highlighted
+            }
+        }
+
+        guard let cached = highlightCache[cacheKey] else {
+            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            return
+        }
+
+        // Compute this paragraph's offset within the code block
+        let offsetInBlock = documentRange.location - info.codeRange.location
+        let cachedString = cached.string as NSString
+        let cachedLength = cachedString.length
+
+        guard offsetInBlock >= 0, offsetInBlock < cachedLength else {
+            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            return
+        }
+
+        // The paragraph length in the cached string (may differ slightly due to trailing newline)
+        let availableLength = min(fullRange.length, cachedLength - offsetInBlock)
+        guard availableLength > 0 else {
+            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            return
+        }
+
+        let sourceRange = NSRange(location: offsetInBlock, length: availableLength)
+
+        // Copy foreground color attributes from the highlighted string
+        cached.enumerateAttribute(.foregroundColor, in: sourceRange) { value, attrRange, _ in
+            guard let color = value as? NSColor else { return }
+            let localRange = NSRange(location: attrRange.location - offsetInBlock, length: attrRange.length)
+            guard localRange.location >= 0, NSMaxRange(localRange) <= fullRange.length else { return }
+            styled.addAttribute(.foregroundColor, value: color, range: localRange)
+        }
+
+        // Override font to match our monospace preference
+        styled.addAttribute(.font, value: font, range: fullRange)
+    }
+
     // MARK: - Inline styling
 
     private func applyInlineStyles(
@@ -168,10 +277,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         // 1. Inline code (first, to protect from other patterns)
         for match in MarkdownPatterns.inlineCode.matches(in: line, range: fullRange) {
             let matchRange = match.range
-            styled.addAttributes([
-                .foregroundColor: NSColor.systemOrange,
-                .backgroundColor: NSColor.quaternaryLabelColor
-            ], range: matchRange)
+            styled.addAttribute(.foregroundColor, value: NSColor.systemOrange, range: matchRange)
             codeRanges.append(matchRange)
         }
 

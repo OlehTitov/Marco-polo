@@ -2,6 +2,194 @@ import AppKit
 
 final class EditorTextView: NSTextView {
 
+    var fencedCodeTracker: FencedCodeTracker?
+
+    // MARK: - Drawing
+
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        clipSelectionInMargins(in: dirtyRect)
+    }
+
+    override func drawBackground(in rect: NSRect) {
+        super.drawBackground(in: rect)
+        drawCodeBlockBackgrounds(in: rect)
+        drawInlineCodeBackgrounds(in: rect)
+    }
+
+    private func drawCodeBlockBackgrounds(in dirtyRect: NSRect) {
+        guard let tracker = fencedCodeTracker,
+              !tracker.fenceRanges.isEmpty,
+              let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager else { return }
+
+        // Use the viewport range to know which character offsets are accurately laid out.
+        // Fragments outside this range have estimated positions that are wrong.
+        guard let viewportRange = tlm.textViewportLayoutController.viewportRange else { return }
+        let vpStart = tcm.offset(from: tcm.documentRange.location, to: viewportRange.location)
+        let vpEnd = tcm.offset(from: tcm.documentRange.location, to: viewportRange.endLocation)
+        guard vpStart != NSNotFound, vpEnd != NSNotFound else { return }
+
+        let origin = textContainerOrigin
+
+        let charWidth = ("#" as NSString).size(withAttributes: [.font: Preferences.shared.font]).width
+        let textMargin = ceil(charWidth * 7)
+
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let bgColor = isDark ? NSColor.white.withAlphaComponent(0.03)
+                             : NSColor.black.withAlphaComponent(0.03)
+
+        for pair in tracker.fenceRanges {
+            guard let close = pair.close else { continue }
+
+            let startOffset = pair.open.location
+            let endOffset = NSMaxRange(close)
+            guard endOffset > startOffset else { continue }
+
+            // Skip code blocks entirely outside the viewport
+            guard startOffset < vpEnd && endOffset > vpStart else { continue }
+
+            // Clamp lookups to the viewport — fragments outside have estimated (wrong) positions.
+            let clampedStart = max(startOffset, vpStart)
+            let clampedEnd = min(endOffset - 1, vpEnd - 1)
+            guard clampedEnd >= clampedStart else { continue }
+
+            let docStart = tcm.documentRange.location
+            guard let startLoc = tcm.location(docStart, offsetBy: clampedStart),
+                  let endLoc = tcm.location(docStart, offsetBy: clampedEnd) else { continue }
+
+            guard let firstFrag = tlm.textLayoutFragment(for: startLoc),
+                  let lastFrag = tlm.textLayoutFragment(for: endLoc) else { continue }
+
+            var topY = firstFrag.layoutFragmentFrame.minY + origin.y
+            var bottomY = lastFrag.layoutFragmentFrame.maxY + origin.y
+
+            // If the code block extends beyond the viewport, stretch background to the
+            // edges of the dirty rect so it looks continuous off-screen.
+            let extendsAbove = startOffset < vpStart
+            let extendsBelow = endOffset > vpEnd
+            if extendsAbove { topY = dirtyRect.minY - 40 }
+            if extendsBelow { bottomY = dirtyRect.maxY + 40 }
+
+            guard bottomY > topY else { continue }
+
+            // Fence lines have paragraphSpacingBefore/After = 24pt inside the fragment frame.
+            // Pull background inward so the spacing sits outside the rounded rect.
+            // Only inset edges where the actual fence is visible (not off-screen).
+            let fenceSpacing: CGFloat = 24
+            let insetTop = extendsAbove ? 0 : fenceSpacing * 0.6
+            let insetBottom = extendsBelow ? 0 : fenceSpacing * 0.6
+            let vPad: CGFloat = 4
+            let blockRect = NSRect(
+                x: origin.x + textMargin,
+                y: (topY + insetTop) - vPad,
+                width: (textContainer?.size.width ?? bounds.width) - 2 * textMargin,
+                height: (bottomY - topY - insetTop - insetBottom) + 2 * vPad
+            )
+
+            guard blockRect.intersects(dirtyRect) else { continue }
+
+            bgColor.setFill()
+            // When edges extend off-screen, the rounded corners at those edges are
+            // clipped anyway, so a uniform corner radius works fine.
+            NSBezierPath(roundedRect: blockRect, xRadius: 10, yRadius: 10).fill()
+        }
+    }
+
+    // MARK: - Inline code background
+
+    private func drawInlineCodeBackgrounds(in dirtyRect: NSRect) {
+        guard let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager,
+              let ts = (tcm as? NSTextContentStorage)?.textStorage else { return }
+
+        guard let viewportRange = tlm.textViewportLayoutController.viewportRange else { return }
+        let docStart = tcm.documentRange.location
+        let vpStart = tcm.offset(from: docStart, to: viewportRange.location)
+        let vpEnd = tcm.offset(from: docStart, to: viewportRange.endLocation)
+        guard vpStart != NSNotFound, vpEnd != NSNotFound, vpEnd > vpStart else { return }
+
+        let str = ts.string as NSString
+        let vpNSRange = NSRange(location: vpStart, length: min(vpEnd - vpStart, str.length - vpStart))
+
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let bgColor = isDark ? NSColor.white.withAlphaComponent(0.08)
+                             : NSColor.black.withAlphaComponent(0.06)
+
+        let origin = textContainerOrigin
+        let vExpand: CGFloat = 2
+        let hExpand: CGFloat = 3
+        let cornerRadius: CGFloat = 4
+
+        str.enumerateSubstrings(in: vpNSRange, options: .byParagraphs) { substring, substringRange, _, _ in
+            guard let substring else { return }
+
+            // Skip lines inside fenced code blocks
+            if let tracker = self.fencedCodeTracker,
+               tracker.isInsideFencedCode(paragraphLocation: substringRange.location) {
+                return
+            }
+            // Also skip fence lines themselves
+            let trimmed = substring.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") { return }
+
+            let localRange = NSRange(location: 0, length: (substring as NSString).length)
+            for match in MarkdownPatterns.inlineCode.matches(in: substring, range: localRange) {
+                let matchRange = match.range
+                let docRange = NSRange(location: substringRange.location + matchRange.location,
+                                       length: matchRange.length)
+
+                guard let startLoc = tcm.location(docStart, offsetBy: docRange.location),
+                      let endLoc = tcm.location(docStart, offsetBy: NSMaxRange(docRange)),
+                      let textRange = NSTextRange(location: startLoc, end: endLoc) else { continue }
+
+                tlm.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, segmentFrame, _, _ in
+                    let rect = NSRect(
+                        x: segmentFrame.minX + origin.x - hExpand,
+                        y: segmentFrame.minY + origin.y - vExpand,
+                        width: segmentFrame.width + 2 * hExpand,
+                        height: segmentFrame.height + 2 * vExpand
+                    )
+                    if rect.intersects(dirtyRect) {
+                        bgColor.setFill()
+                        NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
+                    }
+                    return true
+                }
+            }
+        }
+    }
+
+    // MARK: - Selection clipping
+
+    /// Paints over the selection highlight in the right paragraph margin so the
+    /// selection appears to stop at the text's right edge, not the container edge.
+    /// The left margin is left untouched to preserve the heading hanging prefix.
+    private func clipSelectionInMargins(in dirtyRect: NSRect) {
+        // Only clip when there's an active selection with length
+        guard let ranges = selectedRanges as? [NSValue],
+              ranges.contains(where: { $0.rangeValue.length > 0 }) else { return }
+
+        let charWidth = ("#" as NSString).size(withAttributes: [.font: Preferences.shared.font]).width
+        let textMargin = ceil(charWidth * 7)
+        let origin = textContainerOrigin
+        let containerWidth = textContainer?.size.width ?? bounds.width
+
+        // Right margin clip: from tailIndent position to container right edge
+        let rightClipX = origin.x + containerWidth - textMargin
+        let rightClip = NSRect(
+            x: rightClipX,
+            y: dirtyRect.minY,
+            width: textMargin,
+            height: dirtyRect.height
+        )
+
+        if rightClip.intersects(dirtyRect) {
+            backgroundColor.setFill()
+            rightClip.fill()
+        }
+    }
+
     // MARK: - Auto-pair characters
 
     private let autoPairMap: [String: String] = [

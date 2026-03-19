@@ -7,7 +7,7 @@ enum MarkdownElement {
     case unorderedList(indent: Int)
     case taskList(checked: Bool, indent: Int)
     case horizontalRule
-    case fencedCodeFence
+    case fencedCodeFence(language: String?)
     case fencedCodeBody
     case plain
 }
@@ -30,7 +30,7 @@ struct MarkdownPatterns {
     private static let unorderedListPattern = try! NSRegularExpression(pattern: "^(\\s*)[-*+]\\s")
     private static let taskListPattern = try! NSRegularExpression(pattern: "^(\\s*)- \\[([ x])\\]\\s")
     private static let horizontalRulePattern = try! NSRegularExpression(pattern: "^(---+|\\*\\*\\*+|___+)\\s*$")
-    private static let fencedCodeFencePattern = try! NSRegularExpression(pattern: "^```")
+    private static let fencedCodeFencePattern = try! NSRegularExpression(pattern: "^```(\\w+)?\\s*$")
 
     // MARK: - Paragraph type detection
 
@@ -39,8 +39,10 @@ struct MarkdownPatterns {
         let fullRange = NSRange(location: 0, length: nsLine.length)
 
         // Check for fenced code fence first
-        if fencedCodeFencePattern.firstMatch(in: line, range: fullRange) != nil {
-            return .fencedCodeFence
+        if let match = fencedCodeFencePattern.firstMatch(in: line, range: fullRange) {
+            let langRange = match.range(at: 1)
+            let language: String? = langRange.location != NSNotFound ? nsLine.substring(with: langRange) : nil
+            return .fencedCodeFence(language: language)
         }
 
         // If inside fenced code, everything is body
