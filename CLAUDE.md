@@ -10,23 +10,39 @@ A pure AppKit markdown editor for macOS. Lightweight, fast, distraction-free. Fo
 - **AppDelegate** — app lifecycle
 - **main.swift** — entry point
 
-Pure AppKit + TextKit 1. No SwiftUI. No Electron. No web views.
+Pure AppKit + **TextKit 2**. No SwiftUI. No Electron. No web views.
 
-## Reference Projects
+## MIGRATION: TextKit 1 → TextKit 2
 
-Clone and study before making changes:
+The current code uses TextKit 1 (NSTextStorage + NSLayoutManager + NSTextContainer). **Migrate to TextKit 2** before adding any features. This is priority zero.
 
-1. **MarkEdit** — https://github.com/MarkEdit-app/MarkEdit
-   "TextEdit but for Markdown." Closest to Marco Polo's vision. Study their keyboard shortcuts, find/replace, smart editing helpers.
+### Why
+- TextKit 1 is deprecated. Apple is actively developing TextKit 2.
+- TextKit 2 has lazy layout — only renders visible text. Massive RAM savings on large files.
+- NSTextLayoutManager replaces NSLayoutManager with viewport-based rendering.
+- NSTextContentStorage replaces NSTextStorage with better change tracking.
 
-2. **STTextView** — https://github.com/krzyzanowskim/STTextView
-   TextKit 2 text view component. Study their incremental styling and performance patterns. Consider as future engine replacement if TextKit 1 becomes a bottleneck.
+### How
+- Replace `NSLayoutManager` → `NSTextLayoutManager`
+- Replace `NSTextStorage` → `NSTextContentStorage`
+- `MarkdownTextStorage` must be rewritten: instead of subclassing NSTextStorage, use `NSTextContentStorageDelegate` or `NSTextLayoutManagerDelegate` to apply styles
+- `EditorTextView` stays as NSTextView subclass but configured for TextKit 2 (pass NSTextLayoutManager to init, NOT NSLayoutManager)
+- Typewriter scroll logic in EditorTextView must be updated — glyph-based APIs (`glyphRange`, `boundingRect(forGlyphRange:)`) don't exist in TextKit 2. Use `NSTextLayoutManager.textLayoutFragment(for:)` and fragment frame geometry instead.
+- Test: open a 50,000-line markdown file. It must scroll smoothly with <50MB RAM.
 
-3. **SourceView** — https://github.com/ChimeHQ/SourceView
-   NSTextView + TextKit 2 subclass from the Chime team. Study text container handling and composable feature design.
+### Reference Projects (study these FIRST)
+
+1. **STTextView** (PRIMARY) — https://github.com/krzyzanowskim/STTextView
+   TextKit 2 text view built from scratch. Study their entire architecture: how they handle NSTextContentStorage, NSTextLayoutManager, viewport-based rendering, line fragment handling, gutter, and selection. This is the gold standard for TextKit 2 on macOS.
+
+2. **SourceView** — https://github.com/ChimeHQ/SourceView
+   NSTextView subclass on TextKit 2. Shows how to properly configure NSTextView in TextKit 2 mode and compose features. Closer to our approach (we subclass NSTextView, not build from scratch).
+
+3. **MarkEdit** — https://github.com/MarkEdit-app/MarkEdit
+   "TextEdit but for Markdown." Study their writing UX: keyboard shortcuts, find/replace, smart editing helpers.
 
 4. **swift-markdown** — https://github.com/swiftlang/swift-markdown
-   Apple's Markdown parser. Proper AST. Consider replacing our hand-rolled heading detection with this.
+   Apple's Markdown parser. Proper AST. Replace our hand-rolled `headingLevel(for:)` character loop with this.
 
 ## What Needs Work
 
@@ -67,8 +83,8 @@ All highlighting must be incremental — only re-style the edited paragraph, nev
 
 1. **Pure AppKit.** No SwiftUI, no web views, no Catalyst. System frameworks only.
 2. **No third-party dependencies** unless critical. `swift-markdown` from Apple is acceptable. Nothing from CocoaPods/Carthage.
-3. **RAM is precious.** No caching entire styled documents in memory. Style on demand, discard when offscreen. Profile with Instruments before and after any change.
-4. **Incremental everything.** Syntax highlighting, layout, scrolling — only process what's visible or just changed. Never iterate the full document on every keystroke.
+3. **RAM is precious.** TextKit 2's viewport-based layout is your friend — only styled/laid-out text is what's on screen. Never cache the full styled document. Profile with Instruments before and after any change.
+4. **Viewport-driven.** Leverage NSTextLayoutManager's lazy layout. Only process visible text + a small buffer. Never iterate the full document on keystroke.
 5. **NSDocument architecture.** All file I/O through the document model. Autosave in place.
 6. **Typewriter scroll is sacred.** Cursor centering is a core feature. Toggleable via menu, on by default.
 7. **Dark mode via semantic colors.** Use `.textColor`, `.textBackgroundColor`, `.secondaryLabelColor`, etc. Never hardcode RGB values. Light and dark mode work automatically.
@@ -83,6 +99,7 @@ All highlighting must be incremental — only re-style the edited paragraph, nev
 - Open in Xcode → Cmd+R
 
 ## Priority Order
+0. **Migrate to TextKit 2** (NSTextContentStorage + NSTextLayoutManager). Everything else builds on this.
 1. Full markdown syntax highlighting (bold, italic, code, lists, quotes, links, tasks)
 2. Writing helpers (smart lists, auto-pair, formatting shortcuts)
 3. Focus mode
