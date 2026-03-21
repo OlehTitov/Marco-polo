@@ -3,12 +3,13 @@ import AppKit
 final class EditorTextView: NSTextView {
 
     var fencedCodeTracker: FencedCodeTracker?
+    var markdownStyling: MarkdownStyling?
+    private let headingGutterAnimator = HeadingGutterAnimator()
 
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        clipSelectionInMargins(in: dirtyRect)
     }
 
     override func drawBackground(in rect: NSRect) {
@@ -31,9 +32,6 @@ final class EditorTextView: NSTextView {
         guard vpStart != NSNotFound, vpEnd != NSNotFound else { return }
 
         let origin = textContainerOrigin
-
-        let charWidth = ("#" as NSString).size(withAttributes: [.font: Preferences.shared.font]).width
-        let textMargin = ceil(charWidth * 7)
 
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let bgColor = isDark ? NSColor.white.withAlphaComponent(0.03)
@@ -80,10 +78,11 @@ final class EditorTextView: NSTextView {
             let insetTop = extendsAbove ? 0 : fenceSpacing * 0.6
             let insetBottom = extendsBelow ? 0 : fenceSpacing * 0.6
             let vPad: CGFloat = 4
+            let containerWidth = textContainer?.size.width ?? bounds.width
             let blockRect = NSRect(
-                x: origin.x + textMargin,
+                x: origin.x,
                 y: (topY + insetTop) - vPad,
-                width: (textContainer?.size.width ?? bounds.width) - 2 * textMargin,
+                width: containerWidth,
                 height: (bottomY - topY - insetTop - insetBottom) + 2 * vPad
             )
 
@@ -160,36 +159,6 @@ final class EditorTextView: NSTextView {
         }
     }
 
-    // MARK: - Selection clipping
-
-    /// Paints over the selection highlight in the right paragraph margin so the
-    /// selection appears to stop at the text's right edge, not the container edge.
-    /// The left margin is left untouched to preserve the heading hanging prefix.
-    private func clipSelectionInMargins(in dirtyRect: NSRect) {
-        // Only clip when there's an active selection with length
-        guard let ranges = selectedRanges as? [NSValue],
-              ranges.contains(where: { $0.rangeValue.length > 0 }) else { return }
-
-        let charWidth = ("#" as NSString).size(withAttributes: [.font: Preferences.shared.font]).width
-        let textMargin = ceil(charWidth * 7)
-        let origin = textContainerOrigin
-        let containerWidth = textContainer?.size.width ?? bounds.width
-
-        // Right margin clip: from tailIndent position to container right edge
-        let rightClipX = origin.x + containerWidth - textMargin
-        let rightClip = NSRect(
-            x: rightClipX,
-            y: dirtyRect.minY,
-            width: textMargin,
-            height: dirtyRect.height
-        )
-
-        if rightClip.intersects(dirtyRect) {
-            backgroundColor.setFill()
-            rightClip.fill()
-        }
-    }
-
     // MARK: - Auto-pair characters
 
     private let autoPairMap: [String: String] = [
@@ -262,11 +231,8 @@ final class EditorTextView: NSTextView {
             super.insertText("\n\(continuation)", replacementRange: NSRange(location: insertionPoint, length: 0))
         } else if listPrefixRange(for: lineRange) != nil {
             // Line is just a list prefix with no content — clear it and insert plain newline
-            if let prefixRange = listPrefixRange(for: lineRange) {
-                // Replace the prefix line with just a newline
-                let rangeToReplace = NSRange(location: lineRange.location, length: lineRange.length)
-                super.insertText("\n", replacementRange: rangeToReplace)
-            }
+            let rangeToReplace = NSRange(location: lineRange.location, length: lineRange.length)
+            super.insertText("\n", replacementRange: rangeToReplace)
         } else {
             super.insertNewline(sender)
         }
@@ -411,5 +377,154 @@ final class EditorTextView: NSTextView {
         }
 
         return nil
+    }
+
+    // MARK: - Heading Gutter Animation
+
+    func animateHeadingToGutter(paragraphLocation: Int) {
+        guard let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager,
+              let ts = (tcm as? NSTextContentStorage)?.textStorage,
+              let layer else { return }
+
+        let str = ts.string as NSString
+        guard paragraphLocation < str.length else { return }
+        let paraRange = str.paragraphRange(for: NSRange(location: paragraphLocation, length: 0))
+        let paraText = str.substring(with: paraRange)
+        let level = MarkdownPatterns.headingLevel(for: paraText)
+        guard level > 0 else { return }
+
+        // Capture current inline position before re-layout
+        let startFrame = rectOfPrefix(at: paragraphLocation, length: level + 1)
+
+        // After invalidation, the prefix collapses — compute gutter target on next layout
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let tlm = self.textLayoutManager,
+                  let tcm = tlm.textContentManager else { return }
+
+            let origin = self.textContainerOrigin
+            let prefs = Preferences.shared
+            let prefixText = String(repeating: "#", count: level)
+            let headingFont = prefs.boldFont
+            let attrs: [NSAttributedString.Key: Any] = [.font: headingFont]
+            let prefixSize = (prefixText as NSString).size(withAttributes: attrs)
+            let gutterRightEdge = origin.x
+            let gap: CGFloat = 8
+
+            guard let loc = tcm.location(tcm.documentRange.location, offsetBy: paragraphLocation),
+                  let fragment = tlm.textLayoutFragment(for: loc) else { return }
+
+            let fragmentFrame = fragment.layoutFragmentFrame
+            let endFrame = NSRect(
+                x: gutterRightEdge - prefixSize.width - gap,
+                y: fragmentFrame.minY + origin.y,
+                width: prefixSize.width,
+                height: prefixSize.height
+            )
+
+            guard let start = startFrame else { return }
+
+            // Convert from view coords to layer coords (flipped)
+            let scale = self.window?.backingScaleFactor ?? 2.0
+            self.headingGutterAnimator.animate(
+                text: prefixText,
+                font: headingFont,
+                color: NSColor.tertiaryLabelColor,
+                from: start,
+                to: endFrame,
+                in: layer,
+                backingScale: scale,
+                key: paragraphLocation
+            ) { [weak self] in
+                self?.needsDisplay = true
+            }
+        }
+    }
+
+    func animateHeadingFromGutter(paragraphLocation: Int) {
+        guard let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager,
+              let ts = (tcm as? NSTextContentStorage)?.textStorage,
+              let layer else { return }
+
+        let str = ts.string as NSString
+        guard paragraphLocation < str.length else { return }
+        let paraRange = str.paragraphRange(for: NSRange(location: paragraphLocation, length: 0))
+        let paraText = str.substring(with: paraRange)
+        let level = MarkdownPatterns.headingLevel(for: paraText)
+        guard level > 0 else { return }
+
+        let origin = textContainerOrigin
+        let prefs = Preferences.shared
+        let prefixText = String(repeating: "#", count: level)
+        let headingFont = prefs.boldFont
+        let attrs: [NSAttributedString.Key: Any] = [.font: headingFont]
+        let prefixSize = (prefixText as NSString).size(withAttributes: attrs)
+        let gutterRightEdge = origin.x
+        let gap: CGFloat = 8
+
+        guard let loc = tcm.location(tcm.documentRange.location, offsetBy: paragraphLocation),
+              let fragment = tlm.textLayoutFragment(for: loc) else { return }
+
+        let fragmentFrame = fragment.layoutFragmentFrame
+        let startFrame = NSRect(
+            x: gutterRightEdge - prefixSize.width - gap,
+            y: fragmentFrame.minY + origin.y,
+            width: prefixSize.width,
+            height: prefixSize.height
+        )
+
+        // After invalidation, get the inline target position
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+
+            let endFrame = self.rectOfPrefix(at: paragraphLocation, length: level + 1)
+
+            guard let end = endFrame else { return }
+
+            let scale = self.window?.backingScaleFactor ?? 2.0
+            self.headingGutterAnimator.animate(
+                text: prefixText,
+                font: headingFont,
+                color: NSColor.tertiaryLabelColor,
+                from: startFrame,
+                to: end,
+                in: layer,
+                backingScale: scale,
+                key: paragraphLocation
+            ) { [weak self] in
+                self?.needsDisplay = true
+            }
+        }
+    }
+
+    private func rectOfPrefix(at paragraphLocation: Int, length prefixLen: Int) -> NSRect? {
+        guard let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager else { return nil }
+
+        let docStart = tcm.documentRange.location
+        guard let startLoc = tcm.location(docStart, offsetBy: paragraphLocation),
+              let endLoc = tcm.location(docStart, offsetBy: paragraphLocation + prefixLen),
+              let textRange = NSTextRange(location: startLoc, end: endLoc) else { return nil }
+
+        let origin = textContainerOrigin
+        var result: NSRect?
+
+        tlm.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, segmentFrame, _, _ in
+            let rect = NSRect(
+                x: segmentFrame.minX + origin.x,
+                y: segmentFrame.minY + origin.y,
+                width: segmentFrame.width,
+                height: segmentFrame.height
+            )
+            if let current = result {
+                result = current.union(rect)
+            } else {
+                result = rect
+            }
+            return true
+        }
+
+        return result
     }
 }

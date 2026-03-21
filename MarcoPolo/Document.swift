@@ -20,6 +20,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private var statusBarHeightConstraint: NSLayoutConstraint?
 
     // State
+    var isFocusModeEnabled: Bool { markdownStyling.isFocusModeEnabled }
     private var isSidebarVisible = false
     private var isStatusBarVisible = false
     private var selectionObserver: NSObjectProtocol?
@@ -68,6 +69,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
 
         // TextKit 2 stack
         let textLayoutManager = NSTextLayoutManager()
+        textLayoutManager.delegate = markdownStyling
         textContentStorage.delegate = markdownStyling
         textContentStorage.addTextLayoutManager(textLayoutManager)
 
@@ -173,6 +175,8 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         addWindowController(controller)
         textView = editor
         editor.fencedCodeTracker = fencedCodeTracker
+        editor.markdownStyling = markdownStyling
+        editor.wantsLayer = true
 
         if let pending = pendingContent {
             editor.string = pending
@@ -259,10 +263,13 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         let availableWidth = scrollView.contentSize.width
         let screenWidth = textView.window?.screen?.frame.width ?? NSScreen.main?.frame.width ?? 1440
         let maxContentWidth = screenWidth / 2
-        let minInset: CGFloat = 48
-        let inset = max(minInset, (availableWidth - maxContentWidth) / 2)
-        textView.textContainerInset.width = inset
-        textView.textContainer?.size.width = max(200, availableWidth - 2 * inset)
+        let charWidth = ("#" as NSString).size(withAttributes: [.font: Preferences.shared.font]).width
+        let textMargin = ceil(charWidth * 7)
+        let gutterMin: CGFloat = 56
+        let baseInset = max(gutterMin, (availableWidth - maxContentWidth) / 2)
+        let totalInset = baseInset + textMargin
+        textView.textContainerInset.width = totalInset
+        textView.textContainer?.size.width = max(200, availableWidth - 2 * totalInset)
     }
 
     // MARK: - Focus mode
@@ -278,15 +285,31 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     }
 
     private func handleSelectionChange() {
-        guard markdownStyling.isFocusModeEnabled, let textView, let ts = textContentStorage.textStorage else { return }
+        guard let textView, let ts = textContentStorage.textStorage else { return }
         let sel = textView.selectedRange()
         let str = ts.string as NSString
         guard sel.location <= str.length else { return }
         let paraRange = str.paragraphRange(for: NSRange(location: sel.location, length: 0))
+        let paraText = str.substring(with: paraRange)
         let newLoc = paraRange.location
-        if newLoc != markdownStyling.focusedParagraphLocation {
-            markdownStyling.focusedParagraphLocation = newLoc
-            invalidateAllParagraphs()
+
+        // Heading focus tracking (always active)
+        let newHeadingLoc: Int? = MarkdownPatterns.headingLevel(for: paraText) > 0 ? newLoc : nil
+        let oldHeadingLoc = markdownStyling.focusedHeadingLocation
+        if newHeadingLoc != oldHeadingLoc {
+            markdownStyling.focusedHeadingLocation = newHeadingLoc
+            if let old = oldHeadingLoc { textView.animateHeadingToGutter(paragraphLocation: old) }
+            if let new = newHeadingLoc { textView.animateHeadingFromGutter(paragraphLocation: new) }
+            invalidateParagraph(at: oldHeadingLoc)
+            invalidateParagraph(at: newHeadingLoc)
+        }
+
+        // Focus mode (unchanged, still gated on isFocusModeEnabled)
+        if markdownStyling.isFocusModeEnabled {
+            if newLoc != markdownStyling.focusedParagraphLocation {
+                markdownStyling.focusedParagraphLocation = newLoc
+                invalidateAllParagraphs()
+            }
         }
     }
 
@@ -431,6 +454,16 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private func rebuildFenceTracker() {
         guard let ts = textContentStorage.textStorage else { return }
         fencedCodeTracker.rebuild(from: ts)
+    }
+
+    private func invalidateParagraph(at location: Int?) {
+        guard let location, let ts = textContentStorage.textStorage else { return }
+        let str = ts.string as NSString
+        guard location < str.length else { return }
+        let paraRange = str.paragraphRange(for: NSRange(location: location, length: 0))
+        textContentStorage.performEditingTransaction {
+            ts.edited(.editedAttributes, range: paraRange, changeInLength: 0)
+        }
     }
 
     private func invalidateAllParagraphs() {
