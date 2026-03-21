@@ -21,7 +21,6 @@
 		A0000000000000000000001D /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000201 /* Highlightr */; };
 		A0000000000000000000001E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000108 /* Assets.xcassets */; };
 		A0000000000000000000001F /* HeadingGutterAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000109 /* HeadingGutterAnimator.swift */; };
-		A00000000000000000000023 /* HeadingLayoutFragment.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000010A /* HeadingLayoutFragment.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,7 +41,6 @@
 		A00000000000000000000107 /* MarkdownExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownExporter.swift; sourceTree = "<group>"; };
 		A00000000000000000000108 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A00000000000000000000109 /* HeadingGutterAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingGutterAnimator.swift; sourceTree = "<group>"; };
-		A0000000000000000000010A /* HeadingLayoutFragment.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingLayoutFragment.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -75,7 +73,6 @@
 				A00000000000000000000103 /* FencedCodeTracker.swift */,
 				A00000000000000000000104 /* FormattingCommands.swift */,
 				A00000000000000000000109 /* HeadingGutterAnimator.swift */,
-				A0000000000000000000010A /* HeadingLayoutFragment.swift */,
 				A00000000000000000000107 /* MarkdownExporter.swift */,
 				A00000000000000000000102 /* MarkdownPatterns.swift */,
 				A00000000000000000000003 /* MarkdownStyling.swift */,
@@ -178,7 +175,6 @@
 				A00000000000000000000018 /* FencedCodeTracker.swift in Sources */,
 				A00000000000000000000019 /* FormattingCommands.swift in Sources */,
 				A0000000000000000000001F /* HeadingGutterAnimator.swift in Sources */,
-				A00000000000000000000023 /* HeadingLayoutFragment.swift in Sources */,
 				A0000000000000000000001C /* MarkdownExporter.swift in Sources */,
 				A00000000000000000000017 /* MarkdownPatterns.swift in Sources */,
 				A00000000000000000000013 /* MarkdownStyling.swift in Sources */,

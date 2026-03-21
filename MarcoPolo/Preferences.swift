@@ -1,5 +1,12 @@
 import AppKit
 
+enum TextMetrics {
+    static func textMargin(for font: NSFont) -> CGFloat {
+        let charWidth = ("#" as NSString).size(withAttributes: [.font: font]).width
+        return ceil(charWidth * 7)
+    }
+}
+
 final class Preferences {
     static let shared = Preferences()
     static let didChangeNotification = Notification.Name("PreferencesDidChange")

@@ -1,11 +1,10 @@
 import AppKit
 import Highlightr
 
-final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayoutManagerDelegate {
+final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
     var fencedCodeTracker: FencedCodeTracker?
     var isFocusModeEnabled = false
     var focusedParagraphLocation: Int?
-    var focusedHeadingLocation: Int?
 
     // MARK: - Highlightr
 
@@ -40,10 +39,16 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
 
     private var prefs: Preferences { Preferences.shared }
 
+    var textMargin: CGFloat {
+        TextMetrics.textMargin(for: prefs.font)
+    }
+
     private var baseParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 12
         style.paragraphSpacing = 12
+        style.headIndent = textMargin
+        style.firstLineHeadIndent = textMargin
         return style
     }
 
@@ -114,35 +119,26 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
             let headingStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
             headingStyle.paragraphSpacingBefore = 16
             headingStyle.paragraphSpacing = 6
-            let prefixLen = level + 1  // "## " = 3 chars for level 2
-            let isFocused = documentRange.location == focusedHeadingLocation
-            if isFocused {
-                // Focused: full inline prefix, dimmed
-                styled.addAttributes([
-                    .font: headingFont,
-                    .paragraphStyle: headingStyle
-                ], range: fullRange)
-                if prefixLen <= fullRange.length {
-                    styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor,
-                                        range: NSRange(location: 0, length: prefixLen))
-                }
-            } else {
-                // Unfocused: hide prefix with clear color — natural width preserved.
-                // HeadingLayoutFragment handles gutter decoration via leadingPadding + draw.
-                styled.addAttributes([
-                    .font: headingFont,
-                    .paragraphStyle: headingStyle
-                ], range: fullRange)
-                if prefixLen <= fullRange.length {
-                    styled.addAttribute(.foregroundColor, value: NSColor.clear,
-                                        range: NSRange(location: 0, length: prefixLen))
-                }
+            // Hanging indent: prefix hangs left of the body text margin
+            let margin = textMargin
+            let prefixStr = String(repeating: "#", count: level) + " "
+            let prefixWidth = ceil((prefixStr as NSString).size(withAttributes: [.font: headingFont]).width)
+            headingStyle.firstLineHeadIndent = max(0, margin - prefixWidth)
+            headingStyle.headIndent = margin
+            styled.addAttributes([
+                .font: headingFont,
+                .paragraphStyle: headingStyle
+            ], range: fullRange)
+            let prefixLen = level + 1
+            if prefixLen <= fullRange.length {
+                styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor,
+                                    range: NSRange(location: 0, length: prefixLen))
             }
 
         case .blockquote:
             let bqStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            bqStyle.headIndent = 20
-            bqStyle.firstLineHeadIndent = 20
+            bqStyle.headIndent = textMargin + 20
+            bqStyle.firstLineHeadIndent = textMargin + 20
             styled.addAttributes([
                 .font: prefs.italicFont,
                 .foregroundColor: NSColor.secondaryLabelColor,
@@ -151,9 +147,9 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
 
         case .fencedCodeFence(_):
             let fenceStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            fenceStyle.headIndent = 20
-            fenceStyle.firstLineHeadIndent = 20
-            fenceStyle.tailIndent = -20
+            fenceStyle.headIndent = textMargin + 20
+            fenceStyle.firstLineHeadIndent = textMargin + 20
+            fenceStyle.tailIndent = -(textMargin + 20)
             fenceStyle.paragraphSpacingBefore = 24
             fenceStyle.paragraphSpacing = 24
             styled.addAttributes([
@@ -163,9 +159,9 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
 
         case .fencedCodeBody:
             let codeStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            codeStyle.headIndent = 20
-            codeStyle.firstLineHeadIndent = 20
-            codeStyle.tailIndent = -20
+            codeStyle.headIndent = textMargin + 20
+            codeStyle.firstLineHeadIndent = textMargin + 20
+            codeStyle.tailIndent = -(textMargin + 20)
             styled.addAttribute(.paragraphStyle, value: codeStyle, range: fullRange)
             applyCodeHighlighting(to: styled, fullRange: fullRange, font: font,
                                   documentRange: documentRange, textStorage: textStorage)
@@ -173,15 +169,15 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
         case .orderedList(let indent), .unorderedList(let indent):
             let listStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
             let extraIndent = CGFloat(20 + (indent / 4) * 20)
-            listStyle.headIndent = extraIndent
-            listStyle.firstLineHeadIndent = max(0, extraIndent - 20)
+            listStyle.headIndent = textMargin + extraIndent
+            listStyle.firstLineHeadIndent = textMargin + max(0, extraIndent - 20)
             styled.addAttribute(.paragraphStyle, value: listStyle, range: fullRange)
 
         case .taskList(let checked, let indent):
             let listStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
             let extraIndent = CGFloat(20 + (indent / 4) * 20)
-            listStyle.headIndent = extraIndent
-            listStyle.firstLineHeadIndent = max(0, extraIndent - 20)
+            listStyle.headIndent = textMargin + extraIndent
+            listStyle.firstLineHeadIndent = textMargin + max(0, extraIndent - 20)
             styled.addAttribute(.paragraphStyle, value: listStyle, range: fullRange)
             if checked {
                 styled.addAttributes([
@@ -346,36 +342,4 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
         return range.location == focusLoc
     }
 
-    // MARK: - Layout manager delegate
-
-    func textLayoutManager(
-        _ textLayoutManager: NSTextLayoutManager,
-        textLayoutFragmentFor location: NSTextLocation,
-        in textElement: NSTextElement
-    ) -> NSTextLayoutFragment {
-        guard let paragraph = textElement as? NSTextParagraph else {
-            return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
-        }
-
-        let text = paragraph.attributedString.string
-        let level = MarkdownPatterns.headingLevel(for: text)
-
-        if level > 0,
-           let tcm = textLayoutManager.textContentManager {
-            let offset = tcm.offset(from: tcm.documentRange.location, to: location)
-            let isInFenced = fencedCodeTracker?.isInsideFencedCode(paragraphLocation: offset) ?? false
-            let isFocused = offset == focusedHeadingLocation
-
-            if !isInFenced && !isFocused {
-                return HeadingLayoutFragment(
-                    textElement: textElement,
-                    range: textElement.elementRange,
-                    headingLevel: level,
-                    headingFont: prefs.boldFont
-                )
-            }
-        }
-
-        return NSTextLayoutFragment(textElement: textElement, range: textElement.elementRange)
-    }
 }

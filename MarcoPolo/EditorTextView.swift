@@ -3,8 +3,6 @@ import AppKit
 final class EditorTextView: NSTextView {
 
     var fencedCodeTracker: FencedCodeTracker?
-    var markdownStyling: MarkdownStyling?
-    private let headingGutterAnimator = HeadingGutterAnimator()
 
     // MARK: - Drawing
 
@@ -32,6 +30,7 @@ final class EditorTextView: NSTextView {
         guard vpStart != NSNotFound, vpEnd != NSNotFound else { return }
 
         let origin = textContainerOrigin
+        let textMargin = TextMetrics.textMargin(for: Preferences.shared.font)
 
         let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         let bgColor = isDark ? NSColor.white.withAlphaComponent(0.03)
@@ -80,9 +79,9 @@ final class EditorTextView: NSTextView {
             let vPad: CGFloat = 4
             let containerWidth = textContainer?.size.width ?? bounds.width
             let blockRect = NSRect(
-                x: origin.x,
+                x: origin.x + textMargin,
                 y: (topY + insetTop) - vPad,
-                width: containerWidth,
+                width: containerWidth - 2 * textMargin,
                 height: (bottomY - topY - insetTop - insetBottom) + 2 * vPad
             )
 
@@ -289,10 +288,27 @@ final class EditorTextView: NSTextView {
         setSelectedRange(NSRange(location: linesRange.location, length: (newText as NSString).length))
     }
 
+    // MARK: - Typing attributes sync
+
+    func syncTypingAttributes() {
+        let margin = TextMetrics.textMargin(for: Preferences.shared.font)
+        let style = NSMutableParagraphStyle()
+        style.lineSpacing = 12
+        style.paragraphSpacing = 12
+        style.headIndent = margin
+        style.firstLineHeadIndent = margin
+
+        var attrs = typingAttributes
+        attrs[.paragraphStyle] = style
+        attrs[.font] = Preferences.shared.font
+        typingAttributes = attrs
+    }
+
     // MARK: - Typewriter scroll
 
     override func didChangeText() {
         super.didChangeText()
+        syncTypingAttributes()
         if Preferences.shared.isTypewriterScrollEnabled {
             centerSelectionIfNeeded(animated: false)
         }
@@ -300,6 +316,7 @@ final class EditorTextView: NSTextView {
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting flag: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
+        syncTypingAttributes()
         if Preferences.shared.isTypewriterScrollEnabled {
             centerSelectionIfNeeded(animated: false)
         }
@@ -379,152 +396,4 @@ final class EditorTextView: NSTextView {
         return nil
     }
 
-    // MARK: - Heading Gutter Animation
-
-    func animateHeadingToGutter(paragraphLocation: Int) {
-        guard let tlm = textLayoutManager,
-              let tcm = tlm.textContentManager,
-              let ts = (tcm as? NSTextContentStorage)?.textStorage,
-              let layer else { return }
-
-        let str = ts.string as NSString
-        guard paragraphLocation < str.length else { return }
-        let paraRange = str.paragraphRange(for: NSRange(location: paragraphLocation, length: 0))
-        let paraText = str.substring(with: paraRange)
-        let level = MarkdownPatterns.headingLevel(for: paraText)
-        guard level > 0 else { return }
-
-        // Capture current inline position before re-layout
-        let startFrame = rectOfPrefix(at: paragraphLocation, length: level + 1)
-
-        // After invalidation, the prefix collapses — compute gutter target on next layout
-        DispatchQueue.main.async { [weak self] in
-            guard let self, let tlm = self.textLayoutManager,
-                  let tcm = tlm.textContentManager else { return }
-
-            let origin = self.textContainerOrigin
-            let prefs = Preferences.shared
-            let prefixText = String(repeating: "#", count: level)
-            let headingFont = prefs.boldFont
-            let attrs: [NSAttributedString.Key: Any] = [.font: headingFont]
-            let prefixSize = (prefixText as NSString).size(withAttributes: attrs)
-            let gutterRightEdge = origin.x
-            let gap: CGFloat = 8
-
-            guard let loc = tcm.location(tcm.documentRange.location, offsetBy: paragraphLocation),
-                  let fragment = tlm.textLayoutFragment(for: loc) else { return }
-
-            let fragmentFrame = fragment.layoutFragmentFrame
-            let endFrame = NSRect(
-                x: gutterRightEdge - prefixSize.width - gap,
-                y: fragmentFrame.minY + origin.y,
-                width: prefixSize.width,
-                height: prefixSize.height
-            )
-
-            guard let start = startFrame else { return }
-
-            // Convert from view coords to layer coords (flipped)
-            let scale = self.window?.backingScaleFactor ?? 2.0
-            self.headingGutterAnimator.animate(
-                text: prefixText,
-                font: headingFont,
-                color: NSColor.tertiaryLabelColor,
-                from: start,
-                to: endFrame,
-                in: layer,
-                backingScale: scale,
-                key: paragraphLocation
-            ) { [weak self] in
-                self?.needsDisplay = true
-            }
-        }
-    }
-
-    func animateHeadingFromGutter(paragraphLocation: Int) {
-        guard let tlm = textLayoutManager,
-              let tcm = tlm.textContentManager,
-              let ts = (tcm as? NSTextContentStorage)?.textStorage,
-              let layer else { return }
-
-        let str = ts.string as NSString
-        guard paragraphLocation < str.length else { return }
-        let paraRange = str.paragraphRange(for: NSRange(location: paragraphLocation, length: 0))
-        let paraText = str.substring(with: paraRange)
-        let level = MarkdownPatterns.headingLevel(for: paraText)
-        guard level > 0 else { return }
-
-        let origin = textContainerOrigin
-        let prefs = Preferences.shared
-        let prefixText = String(repeating: "#", count: level)
-        let headingFont = prefs.boldFont
-        let attrs: [NSAttributedString.Key: Any] = [.font: headingFont]
-        let prefixSize = (prefixText as NSString).size(withAttributes: attrs)
-        let gutterRightEdge = origin.x
-        let gap: CGFloat = 8
-
-        guard let loc = tcm.location(tcm.documentRange.location, offsetBy: paragraphLocation),
-              let fragment = tlm.textLayoutFragment(for: loc) else { return }
-
-        let fragmentFrame = fragment.layoutFragmentFrame
-        let startFrame = NSRect(
-            x: gutterRightEdge - prefixSize.width - gap,
-            y: fragmentFrame.minY + origin.y,
-            width: prefixSize.width,
-            height: prefixSize.height
-        )
-
-        // After invalidation, get the inline target position
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-
-            let endFrame = self.rectOfPrefix(at: paragraphLocation, length: level + 1)
-
-            guard let end = endFrame else { return }
-
-            let scale = self.window?.backingScaleFactor ?? 2.0
-            self.headingGutterAnimator.animate(
-                text: prefixText,
-                font: headingFont,
-                color: NSColor.tertiaryLabelColor,
-                from: startFrame,
-                to: end,
-                in: layer,
-                backingScale: scale,
-                key: paragraphLocation
-            ) { [weak self] in
-                self?.needsDisplay = true
-            }
-        }
-    }
-
-    private func rectOfPrefix(at paragraphLocation: Int, length prefixLen: Int) -> NSRect? {
-        guard let tlm = textLayoutManager,
-              let tcm = tlm.textContentManager else { return nil }
-
-        let docStart = tcm.documentRange.location
-        guard let startLoc = tcm.location(docStart, offsetBy: paragraphLocation),
-              let endLoc = tcm.location(docStart, offsetBy: paragraphLocation + prefixLen),
-              let textRange = NSTextRange(location: startLoc, end: endLoc) else { return nil }
-
-        let origin = textContainerOrigin
-        var result: NSRect?
-
-        tlm.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, segmentFrame, _, _ in
-            let rect = NSRect(
-                x: segmentFrame.minX + origin.x,
-                y: segmentFrame.minY + origin.y,
-                width: segmentFrame.width,
-                height: segmentFrame.height
-            )
-            if let current = result {
-                result = current.union(rect)
-            } else {
-                result = rect
-            }
-            return true
-        }
-
-        return result
-    }
 }
