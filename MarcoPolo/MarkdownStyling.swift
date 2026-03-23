@@ -117,6 +117,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         case .heading(let level):
             let headingFont = prefs.boldFont
             let headingStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
+            headingStyle.lineSpacing = 0
             headingStyle.paragraphSpacingBefore = 16
             headingStyle.paragraphSpacing = 6
             // Hanging indent: prefix hangs left of the body text margin
