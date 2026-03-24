@@ -109,7 +109,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         editor.isHorizontallyResizable = false
         editor.autoresizingMask = [.width]
         editor.backgroundColor = .textBackgroundColor
-        editor.insertionPointColor = .textColor
+        editor.insertionPointColor = .systemBlue
         editor.textColor = .textColor
         editor.font = prefs.font
         editor.textContainerInset = NSSize(width: 80, height: max(140, contentSize.height * 0.35)) // width updated in updateTextInsets

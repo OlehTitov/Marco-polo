@@ -4,6 +4,47 @@ final class EditorTextView: NSTextView {
 
     var fencedCodeTracker: FencedCodeTracker?
 
+    // MARK: - Insertion point
+
+    private let cursorWidth: CGFloat = 4
+    private var lastCursorRect: NSRect = .zero
+
+    private var cursorHeight: CGFloat {
+        let font = Preferences.shared.font
+        return ceil(font.pointSize * 1.8)
+    }
+
+    override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
+        let h = cursorHeight
+        let midY = rect.origin.y + rect.height / 2
+        let cursorRect = NSRect(
+            x: rect.origin.x,
+            y: midY - h / 2,
+            width: cursorWidth,
+            height: h
+        )
+
+        if lastCursorRect != .zero {
+            setNeedsDisplay(lastCursorRect, avoidAdditionalLayout: true)
+        }
+
+        if flag {
+            insertionPointColor.setFill()
+            NSBezierPath(roundedRect: cursorRect, xRadius: cursorWidth / 2, yRadius: cursorWidth / 2).fill()
+        }
+
+        lastCursorRect = cursorRect
+    }
+
+    override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
+        let margin: CGFloat = 40
+        var expanded = rect
+        expanded.origin.y -= margin
+        expanded.size.height += margin * 2
+        expanded.size.width += cursorWidth * 2
+        super.setNeedsDisplay(expanded, avoidAdditionalLayout: flag)
+    }
+
     // MARK: - Drawing
 
     override func draw(_ dirtyRect: NSRect) {
@@ -70,19 +111,13 @@ final class EditorTextView: NSTextView {
 
             guard bottomY > topY else { continue }
 
-            // Fence lines have paragraphSpacingBefore/After = 24pt inside the fragment frame.
-            // Pull background inward so the spacing sits outside the rounded rect.
-            // Only inset edges where the actual fence is visible (not off-screen).
-            let fenceSpacing: CGFloat = 24
-            let insetTop = extendsAbove ? 0 : fenceSpacing * 0.6
-            let insetBottom = extendsBelow ? 0 : fenceSpacing * 0.6
             let vPad: CGFloat = 4
             let containerWidth = textContainer?.size.width ?? bounds.width
             let blockRect = NSRect(
                 x: origin.x + textMargin,
-                y: (topY + insetTop) - vPad,
+                y: topY - vPad,
                 width: containerWidth - 2 * textMargin,
-                height: (bottomY - topY - insetTop - insetBottom) + 2 * vPad
+                height: (bottomY - topY) + 2 * vPad
             )
 
             guard blockRect.intersects(dirtyRect) else { continue }
@@ -294,7 +329,6 @@ final class EditorTextView: NSTextView {
         let margin = TextMetrics.textMargin(for: Preferences.shared.font)
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 12
-        style.paragraphSpacing = 12
         style.headIndent = margin
         style.firstLineHeadIndent = margin
 

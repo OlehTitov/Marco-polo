@@ -46,7 +46,6 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
     private var baseParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.lineSpacing = 12
-        style.paragraphSpacing = 12
         style.headIndent = textMargin
         style.firstLineHeadIndent = textMargin
         return style
@@ -118,8 +117,6 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
             let headingFont = prefs.boldFont
             let headingStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
             headingStyle.lineSpacing = 0
-            headingStyle.paragraphSpacingBefore = 16
-            headingStyle.paragraphSpacing = 6
             // Hanging indent: prefix hangs left of the body text margin
             let margin = textMargin
             let prefixStr = String(repeating: "#", count: level) + " "
@@ -151,8 +148,8 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
             fenceStyle.headIndent = textMargin + 20
             fenceStyle.firstLineHeadIndent = textMargin + 20
             fenceStyle.tailIndent = -(textMargin + 20)
-            fenceStyle.paragraphSpacingBefore = 24
-            fenceStyle.paragraphSpacing = 24
+            fenceStyle.paragraphSpacingBefore = 0
+            fenceStyle.paragraphSpacing = 0
             styled.addAttributes([
                 .foregroundColor: NSColor.tertiaryLabelColor,
                 .paragraphStyle: fenceStyle
