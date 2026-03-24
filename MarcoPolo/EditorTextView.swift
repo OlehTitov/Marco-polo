@@ -9,27 +9,15 @@ final class EditorTextView: NSTextView {
     private let cursorWidth: CGFloat = 4
     private var lastCursorRect: NSRect = .zero
 
-    private var cursorHeight: CGFloat {
-        let font = Preferences.shared.font
-        return ceil(font.pointSize * 1.8)
-    }
-
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-        let h = cursorHeight
-        let midY = rect.origin.y + rect.height / 2
-        let cursorRect = NSRect(
-            x: rect.origin.x,
-            y: midY - h / 2,
-            width: cursorWidth,
-            height: h
-        )
+        let cursorRect = resolvedInsertionPointRect(from: rect)
 
         if lastCursorRect != .zero {
             setNeedsDisplay(lastCursorRect, avoidAdditionalLayout: true)
         }
 
         if flag {
-            insertionPointColor.setFill()
+            color.setFill()
             NSBezierPath(roundedRect: cursorRect, xRadius: cursorWidth / 2, yRadius: cursorWidth / 2).fill()
         }
 
@@ -326,15 +314,15 @@ final class EditorTextView: NSTextView {
     // MARK: - Typing attributes sync
 
     func syncTypingAttributes() {
-        let margin = TextMetrics.textMargin(for: Preferences.shared.font)
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = 12
-        style.headIndent = margin
-        style.firstLineHeadIndent = margin
+        let prefs = Preferences.shared
+        let element = currentParagraphElement()
+        let font = EditorTypography.font(for: element, preferences: prefs)
+        let style = EditorTypography.paragraphStyle(for: element, preferences: prefs)
 
         var attrs = typingAttributes
         attrs[.paragraphStyle] = style
-        attrs[.font] = Preferences.shared.font
+        attrs[.font] = font
+        attrs[.foregroundColor] = NSColor.textColor
         typingAttributes = attrs
     }
 
@@ -393,6 +381,28 @@ final class EditorTextView: NSTextView {
     }
 
     // MARK: - TextKit 2 Cursor Geometry
+
+    private func currentParagraphElement() -> MarkdownElement {
+        guard let (lineText, lineRange) = currentLineText() else {
+            return .plain
+        }
+
+        let isInFencedCode = fencedCodeTracker?.isInsideFencedCode(paragraphLocation: lineRange.location) ?? false
+        return MarkdownPatterns.paragraphType(for: lineText, isInFencedCode: isInFencedCode)
+    }
+
+    private func resolvedInsertionPointRect(from rect: NSRect) -> NSRect {
+        let rawHeight = rect.height > 0 ? rect.height : EditorTypography.fallbackCaretHeight(for: Preferences.shared.font)
+        let drawHeight = max(2, floor(rawHeight))
+        let drawY = rect.origin.y + ((rawHeight - drawHeight) / 2.0)
+
+        return NSRect(
+            x: rect.origin.x,
+            y: drawY,
+            width: cursorWidth,
+            height: drawHeight
+        ).integral
+    }
 
     private func cursorRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
         guard let contentManager = tlm.textContentManager,

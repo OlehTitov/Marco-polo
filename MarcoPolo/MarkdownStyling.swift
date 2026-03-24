@@ -1,6 +1,85 @@
 import AppKit
 import Highlightr
 
+enum EditorTypography {
+    static let bodyLineHeightMultiple: CGFloat = 1.38
+
+    private static let blockIndent: CGFloat = 20
+    private static let headingSpacingBeforeScale: [CGFloat] = [10, 8, 6, 4, 4, 4]
+    private static let headingSpacingAfterScale: [CGFloat] = [6, 4, 3, 2, 2, 2]
+
+    static func font(for element: MarkdownElement, preferences: Preferences) -> NSFont {
+        switch element {
+        case .heading:
+            return preferences.boldFont
+        case .blockquote:
+            return preferences.italicFont
+        default:
+            return preferences.font
+        }
+    }
+
+    static func paragraphStyle(for element: MarkdownElement, preferences: Preferences) -> NSMutableParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        let margin = TextMetrics.textMargin(for: preferences.font)
+
+        style.lineHeightMultiple = bodyLineHeightMultiple
+        style.headIndent = margin
+        style.firstLineHeadIndent = margin
+
+        switch element {
+        case .heading(let level):
+            let headingFont = font(for: element, preferences: preferences)
+            let prefix = String(repeating: "#", count: level) + " "
+            let prefixWidth = ceil((prefix as NSString).size(withAttributes: [.font: headingFont]).width)
+
+            style.firstLineHeadIndent = max(0, margin - prefixWidth)
+            style.paragraphSpacingBefore = headingSpacingBefore(for: level)
+            style.paragraphSpacing = headingSpacingAfter(for: level)
+
+        case .blockquote:
+            style.headIndent = margin + blockIndent
+            style.firstLineHeadIndent = margin + blockIndent
+
+        case .fencedCodeFence(_), .fencedCodeBody:
+            style.headIndent = margin + blockIndent
+            style.firstLineHeadIndent = margin + blockIndent
+            style.tailIndent = -(margin + blockIndent)
+
+        case .orderedList(let indent), .unorderedList(let indent), .taskList(_, let indent):
+            let nestingLevel = CGFloat(indent / 4)
+            let extraIndent = blockIndent + (nestingLevel * blockIndent)
+            style.headIndent = margin + extraIndent
+            style.firstLineHeadIndent = margin + max(0, extraIndent - blockIndent)
+
+        case .horizontalRule:
+            style.paragraphSpacingBefore = 6
+            style.paragraphSpacing = 6
+
+        case .plain:
+            break
+        }
+
+        return style
+    }
+
+    static func fallbackCaretHeight(for font: NSFont) -> CGFloat {
+        ceil(font.ascender - font.descender + font.leading)
+    }
+
+    private static func headingSpacingBefore(for level: Int) -> CGFloat {
+        headingSpacingBeforeScale[clampedHeadingIndex(for: level)]
+    }
+
+    private static func headingSpacingAfter(for level: Int) -> CGFloat {
+        headingSpacingAfterScale[clampedHeadingIndex(for: level)]
+    }
+
+    private static func clampedHeadingIndex(for level: Int) -> Int {
+        min(max(level, 1), 6) - 1
+    }
+}
+
 final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
     var fencedCodeTracker: FencedCodeTracker?
     var isFocusModeEnabled = false
@@ -39,18 +118,6 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
 
     private var prefs: Preferences { Preferences.shared }
 
-    var textMargin: CGFloat {
-        TextMetrics.textMargin(for: prefs.font)
-    }
-
-    private var baseParagraphStyle: NSParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.lineSpacing = 12
-        style.headIndent = textMargin
-        style.firstLineHeadIndent = textMargin
-        return style
-    }
-
     func textContentStorage(
         _ textContentStorage: NSTextContentStorage,
         textParagraphWith range: NSRange
@@ -64,8 +131,11 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         let nsLine = line as NSString
         let fullRange = NSRange(location: 0, length: nsLine.length)
         let styled = NSMutableAttributedString(string: line)
-        let font = prefs.font
-        let paraStyle = baseParagraphStyle
+
+        let isInFenced = fencedCodeTracker?.isInsideFencedCode(paragraphLocation: range.location) ?? false
+        let element = MarkdownPatterns.paragraphType(for: line, isInFencedCode: isInFenced)
+        let font = EditorTypography.font(for: element, preferences: prefs)
+        let paraStyle = EditorTypography.paragraphStyle(for: element, preferences: prefs)
 
         // Base attributes
         styled.setAttributes([
@@ -74,12 +144,8 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
             .paragraphStyle: paraStyle
         ], range: fullRange)
 
-        // Determine paragraph type
-        let isInFenced = fencedCodeTracker?.isInsideFencedCode(paragraphLocation: range.location) ?? false
-        let element = MarkdownPatterns.paragraphType(for: line, isInFencedCode: isInFenced)
-
         // Apply block-level style
-        applyBlockStyle(element, to: styled, fullRange: fullRange, font: font, paraStyle: paraStyle,
+        applyBlockStyle(element, to: styled, fullRange: fullRange, font: font,
                         documentRange: range, textStorage: textStorage)
 
         // Apply inline styles (skip inside fenced code body)
@@ -108,25 +174,11 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         to styled: NSMutableAttributedString,
         fullRange: NSRange,
         font: NSFont,
-        paraStyle: NSParagraphStyle,
         documentRange: NSRange,
         textStorage: NSTextStorage
     ) {
         switch element {
         case .heading(let level):
-            let headingFont = prefs.boldFont
-            let headingStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            headingStyle.lineSpacing = 0
-            // Hanging indent: prefix hangs left of the body text margin
-            let margin = textMargin
-            let prefixStr = String(repeating: "#", count: level) + " "
-            let prefixWidth = ceil((prefixStr as NSString).size(withAttributes: [.font: headingFont]).width)
-            headingStyle.firstLineHeadIndent = max(0, margin - prefixWidth)
-            headingStyle.headIndent = margin
-            styled.addAttributes([
-                .font: headingFont,
-                .paragraphStyle: headingStyle
-            ], range: fullRange)
             let prefixLen = level + 1
             if prefixLen <= fullRange.length {
                 styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor,
@@ -134,49 +186,19 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
             }
 
         case .blockquote:
-            let bqStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            bqStyle.headIndent = textMargin + 20
-            bqStyle.firstLineHeadIndent = textMargin + 20
-            styled.addAttributes([
-                .font: prefs.italicFont,
-                .foregroundColor: NSColor.secondaryLabelColor,
-                .paragraphStyle: bqStyle
-            ], range: fullRange)
+            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
 
         case .fencedCodeFence(_):
-            let fenceStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            fenceStyle.headIndent = textMargin + 20
-            fenceStyle.firstLineHeadIndent = textMargin + 20
-            fenceStyle.tailIndent = -(textMargin + 20)
-            fenceStyle.paragraphSpacingBefore = 0
-            fenceStyle.paragraphSpacing = 0
-            styled.addAttributes([
-                .foregroundColor: NSColor.tertiaryLabelColor,
-                .paragraphStyle: fenceStyle
-            ], range: fullRange)
+            styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: fullRange)
 
         case .fencedCodeBody:
-            let codeStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            codeStyle.headIndent = textMargin + 20
-            codeStyle.firstLineHeadIndent = textMargin + 20
-            codeStyle.tailIndent = -(textMargin + 20)
-            styled.addAttribute(.paragraphStyle, value: codeStyle, range: fullRange)
             applyCodeHighlighting(to: styled, fullRange: fullRange, font: font,
                                   documentRange: documentRange, textStorage: textStorage)
 
-        case .orderedList(let indent), .unorderedList(let indent):
-            let listStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            let extraIndent = CGFloat(20 + (indent / 4) * 20)
-            listStyle.headIndent = textMargin + extraIndent
-            listStyle.firstLineHeadIndent = textMargin + max(0, extraIndent - 20)
-            styled.addAttribute(.paragraphStyle, value: listStyle, range: fullRange)
+        case .orderedList, .unorderedList:
+            break
 
-        case .taskList(let checked, let indent):
-            let listStyle = paraStyle.mutableCopy() as! NSMutableParagraphStyle
-            let extraIndent = CGFloat(20 + (indent / 4) * 20)
-            listStyle.headIndent = textMargin + extraIndent
-            listStyle.firstLineHeadIndent = textMargin + max(0, extraIndent - 20)
-            styled.addAttribute(.paragraphStyle, value: listStyle, range: fullRange)
+        case .taskList(let checked, _):
             if checked {
                 styled.addAttributes([
                     .foregroundColor: NSColor.secondaryLabelColor,

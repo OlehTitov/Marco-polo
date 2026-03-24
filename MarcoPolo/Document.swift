@@ -208,6 +208,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
 
         // Initial state
         rebuildFenceTracker()
+        editor.syncTypingAttributes()
         outlineSidebar?.rebuildOutline(from: editor.string)
         if isStatusBarVisible {
             statusBarView?.updateCounts(text: editor.string)
@@ -261,6 +262,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         updateChangeCount(.changeDone)
         rebuildFenceTracker()
         markdownStyling.clearHighlightCache()
+        textView?.syncTypingAttributes()
         if isSidebarVisible, let text = textView?.string {
             outlineSidebar?.scheduleRebuild(from: text)
         }
@@ -440,6 +442,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         guard let textView else { return }
         let prefs = Preferences.shared
         textView.font = prefs.font
+        updateTextInsets()
         textView.syncTypingAttributes()
         invalidateAllParagraphs()
     }
