@@ -278,18 +278,19 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         }
 
         // 2. Bold-italic ***text***
+        var boldItalicRanges: [NSRange] = []
         for match in MarkdownPatterns.boldItalic.matches(in: line, range: fullRange) {
             let matchRange = match.range
             guard !overlapsCode(matchRange, codeRanges: codeRanges) else { continue }
             styled.addAttribute(.font, value: prefs.boldItalicFont, range: matchRange)
+            boldItalicRanges.append(matchRange)
         }
 
         // 3. Bold **text**
         for match in MarkdownPatterns.bold.matches(in: line, range: fullRange) {
             let matchRange = match.range
             guard !overlapsCode(matchRange, codeRanges: codeRanges) else { continue }
-            // Skip if part of bold-italic
-            if matchRange.length > 4 { continue }
+            guard !overlapsCode(matchRange, codeRanges: boldItalicRanges) else { continue }
             styled.addAttribute(.font, value: prefs.boldFont, range: matchRange)
         }
 

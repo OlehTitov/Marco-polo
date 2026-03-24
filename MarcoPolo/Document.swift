@@ -13,6 +13,8 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private var outlineSidebar: OutlineSidebar?
     private var statusBarView: StatusBarView?
     private var containerView: NSView?
+    private var topFadeView: EdgeFadeView?
+    private var bottomFadeView: EdgeFadeView?
 
     // Layout constraints for toggling
     private var scrollViewBottomConstraint: NSLayoutConstraint?
@@ -140,6 +142,18 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
 
         cv.addSubview(sv)
 
+        // Edge fade overlays (above scroll view in z-order)
+        let fadeHeight: CGFloat = 40
+        let topFade = EdgeFadeView(edge: .top)
+        topFade.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(topFade)
+        topFadeView = topFade
+
+        let bottomFade = EdgeFadeView(edge: .bottom)
+        bottomFade.translatesAutoresizingMaskIntoConstraints = false
+        cv.addSubview(bottomFade)
+        bottomFadeView = bottomFade
+
         // Constraints
         let sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 0)
         sidebarWidthConstraint = sidebarWidth
@@ -167,7 +181,19 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
             statusBar.leadingAnchor.constraint(equalTo: cv.leadingAnchor),
             statusBar.trailingAnchor.constraint(equalTo: cv.trailingAnchor),
             statusBar.bottomAnchor.constraint(equalTo: cv.bottomAnchor),
-            statusHeight
+            statusHeight,
+
+            // Top fade — pinned to scroll view top edge
+            topFade.topAnchor.constraint(equalTo: sv.topAnchor),
+            topFade.leadingAnchor.constraint(equalTo: sv.leadingAnchor),
+            topFade.trailingAnchor.constraint(equalTo: sv.trailingAnchor),
+            topFade.heightAnchor.constraint(equalToConstant: fadeHeight),
+
+            // Bottom fade — pinned to scroll view bottom edge
+            bottomFade.bottomAnchor.constraint(equalTo: sv.bottomAnchor),
+            bottomFade.leadingAnchor.constraint(equalTo: sv.leadingAnchor),
+            bottomFade.trailingAnchor.constraint(equalTo: sv.trailingAnchor),
+            bottomFade.heightAnchor.constraint(equalToConstant: fadeHeight)
         ])
 
         let controller = NSWindowController(window: window)
@@ -450,5 +476,39 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         if Preferences.shared.isTypewriterScrollEnabled {
             textView.centerSelectionIfNeeded(animated: true)
         }
+    }
+}
+
+// MARK: - Edge fade overlay
+
+private final class EdgeFadeView: NSView {
+    enum Edge { case top, bottom }
+
+    private let edge: Edge
+
+    init(edge: Edge) {
+        self.edge = edge
+        super.init(frame: .zero)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let gradient = NSGradient(
+            starting: .textBackgroundColor,
+            ending: .textBackgroundColor.withAlphaComponent(0)
+        ) else { return }
+
+        switch edge {
+        case .top:
+            gradient.draw(in: bounds, angle: 270) // opaque at top, transparent at bottom
+        case .bottom:
+            gradient.draw(in: bounds, angle: 90)  // opaque at bottom, transparent at top
+        }
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil // click-through
     }
 }
