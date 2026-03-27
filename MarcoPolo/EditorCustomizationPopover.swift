@@ -253,13 +253,13 @@ final class ThemeSwatchButton: NSButton {
             NSBezierPath(ovalIn: fillRect).fill()
         }
 
-        if theme == .midnight {
+        if theme == .dark || theme == .quiet {
             NSColor.separatorColor.withAlphaComponent(0.15).setStroke()
             let innerStroke = NSBezierPath(ovalIn: fillRect.insetBy(dx: 0.5, dy: 0.5))
             innerStroke.lineWidth = 1
             innerStroke.stroke()
         } else {
-            let highlight = palette.editorText.withAlphaComponent(0.05)
+            let highlight = resolvedPreviewColor(palette.editorText.withAlphaComponent(0.05), for: appearance)
             highlight.setStroke()
             let innerStroke = NSBezierPath(ovalIn: fillRect.insetBy(dx: 0.5, dy: 0.5))
             innerStroke.lineWidth = 1
@@ -269,7 +269,7 @@ final class ThemeSwatchButton: NSButton {
 }
 
 final class MonogramButton: NSButton {
-    var palette: EditorThemePalette = EditorTheme.system.palette(for: NSApp.effectiveAppearance) {
+    var palette: EditorThemePalette = EditorTheme.dark.palette(for: NSAppearance(named: .darkAqua) ?? NSApp.effectiveAppearance) {
         didSet { needsDisplay = true }
     }
 

@@ -1,5 +1,26 @@
 import AppKit
 
+private extension NSColor {
+    static func hex(_ value: UInt32, alpha: CGFloat = 1) -> NSColor {
+        let red = CGFloat((value >> 16) & 0xFF) / 255
+        let green = CGFloat((value >> 8) & 0xFF) / 255
+        let blue = CGFloat(value & 0xFF) / 255
+        return NSColor(srgbRed: red, green: green, blue: blue, alpha: alpha)
+    }
+}
+
+func resolvedPreviewColor(_ color: NSColor, for appearance: NSAppearance) -> NSColor {
+    var resolved = color
+    if #available(macOS 11.0, *) {
+        appearance.performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.deviceRGB) ?? color
+        }
+    } else {
+        resolved = color.usingColorSpace(.deviceRGB) ?? color
+    }
+    return resolved
+}
+
 enum EditorContentWidth: String, CaseIterable {
     case narrow
     case balanced
@@ -50,119 +71,100 @@ struct EditorThemePalette {
 }
 
 enum EditorTheme: String, CaseIterable {
-    case system
+    case light
     case paper
-    case mist
-    case midnight
+    case dark
+    case calm
+    case quiet
 
     var displayName: String {
         switch self {
-        case .system: return "System"
+        case .light: return "Light"
         case .paper: return "Paper"
-        case .mist: return "Mist"
-        case .midnight: return "Midnight"
+        case .dark: return "Dark"
+        case .calm: return "Calm"
+        case .quiet: return "Quiet"
         }
     }
 
     var preferredAppearanceName: NSAppearance.Name? {
         switch self {
-        case .system:
-            return nil
-        case .paper, .mist:
+        case .light, .paper, .calm:
             return .aqua
-        case .midnight:
+        case .dark, .quiet:
             return .darkAqua
         }
     }
 
     func palette(for appearance: NSAppearance) -> EditorThemePalette {
         switch self {
-        case .system:
-            let isDark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        case .light:
             return EditorThemePalette(
                 editorBackground: .textBackgroundColor,
-                editorText: .textColor,
-                secondaryText: .secondaryLabelColor,
-                tertiaryText: .tertiaryLabelColor,
-                subduedText: .tertiaryLabelColor,
-                linkText: .linkColor,
-                caret: .systemBlue,
-                sidebarBackground: .windowBackgroundColor,
-                sidebarText: .labelColor,
-                sidebarBorder: .separatorColor.withAlphaComponent(isDark ? 0.75 : 0.45),
-                statusBarBackground: .windowBackgroundColor,
-                statusBarText: .secondaryLabelColor,
-                separator: .separatorColor,
-                codeBlockFill: .labelColor.withAlphaComponent(isDark ? 0.06 : 0.035),
-                inlineCodeFill: .labelColor.withAlphaComponent(isDark ? 0.11 : 0.07),
-                inlineCodeText: .systemOrange,
-                fadeOverlayColor: .textBackgroundColor,
-                fadeOverlayOpacity: isDark ? 1.0 : 0.98,
-                monogramText: .tertiaryLabelColor,
-                monogramHoverFill: .separatorColor.withAlphaComponent(isDark ? 0.18 : 0.10),
-                monogramActiveFill: .selectedContentBackgroundColor.withAlphaComponent(isDark ? 0.34 : 0.18),
-                popoverLabelText: .labelColor,
-                popoverSecondaryText: .secondaryLabelColor,
-                codeThemeName: isDark ? "atom-one-dark" : "atom-one-light"
-            )
-
-        case .paper:
-            return EditorThemePalette(
-                editorBackground: .underPageBackgroundColor,
-                editorText: .labelColor,
-                secondaryText: .secondaryLabelColor,
-                tertiaryText: .tertiaryLabelColor,
-                subduedText: .tertiaryLabelColor,
-                linkText: .linkColor,
-                caret: .controlAccentColor,
-                sidebarBackground: .controlBackgroundColor,
-                sidebarText: .labelColor,
-                sidebarBorder: .separatorColor.withAlphaComponent(0.4),
-                statusBarBackground: .windowBackgroundColor,
-                statusBarText: .secondaryLabelColor,
-                separator: .separatorColor,
-                codeBlockFill: .labelColor.withAlphaComponent(0.035),
-                inlineCodeFill: .labelColor.withAlphaComponent(0.06),
-                inlineCodeText: .systemOrange,
-                fadeOverlayColor: .underPageBackgroundColor,
-                fadeOverlayOpacity: 0.97,
-                monogramText: .secondaryLabelColor,
-                monogramHoverFill: .separatorColor.withAlphaComponent(0.12),
-                monogramActiveFill: .selectedContentBackgroundColor.withAlphaComponent(0.16),
-                popoverLabelText: .labelColor,
-                popoverSecondaryText: .secondaryLabelColor,
-                codeThemeName: "atom-one-light"
-            )
-
-        case .mist:
-            return EditorThemePalette(
-                editorBackground: .windowBackgroundColor,
                 editorText: .labelColor,
                 secondaryText: .secondaryLabelColor,
                 tertiaryText: .tertiaryLabelColor,
                 subduedText: .tertiaryLabelColor,
                 linkText: .controlAccentColor,
                 caret: .controlAccentColor,
-                sidebarBackground: .controlBackgroundColor,
+                sidebarBackground: .windowBackgroundColor,
                 sidebarText: .labelColor,
-                sidebarBorder: .separatorColor.withAlphaComponent(0.42),
-                statusBarBackground: .controlBackgroundColor,
+                sidebarBorder: .separatorColor.withAlphaComponent(0.45),
+                statusBarBackground: .windowBackgroundColor,
                 statusBarText: .secondaryLabelColor,
                 separator: .separatorColor,
-                codeBlockFill: .labelColor.withAlphaComponent(0.03),
-                inlineCodeFill: .labelColor.withAlphaComponent(0.055),
+                codeBlockFill: .labelColor.withAlphaComponent(0.035),
+                inlineCodeFill: .labelColor.withAlphaComponent(0.07),
                 inlineCodeText: .systemOrange,
-                fadeOverlayColor: .windowBackgroundColor,
-                fadeOverlayOpacity: 0.96,
+                fadeOverlayColor: .textBackgroundColor,
+                fadeOverlayOpacity: 0.98,
                 monogramText: .secondaryLabelColor,
-                monogramHoverFill: .separatorColor.withAlphaComponent(0.13),
+                monogramHoverFill: .separatorColor.withAlphaComponent(0.10),
                 monogramActiveFill: .selectedContentBackgroundColor.withAlphaComponent(0.18),
                 popoverLabelText: .labelColor,
                 popoverSecondaryText: .secondaryLabelColor,
                 codeThemeName: "atom-one-light"
             )
 
-        case .midnight:
+        case .paper:
+            let latteBase = NSColor.hex(0xEFF1F5)
+            let latteMantle = NSColor.hex(0xE6E9EF)
+            let latteCrust = NSColor.hex(0xDCE0E8)
+            let latteText = NSColor.hex(0x4C4F69)
+            let latteSubtext1 = NSColor.hex(0x5C5F77)
+            let latteSubtext0 = NSColor.hex(0x6C6F85)
+            let latteSurface0 = NSColor.hex(0xCCD0DA)
+            let latteBlue = NSColor.hex(0x1E66F5)
+            let latteSapphire = NSColor.hex(0x209FB5)
+
+            return EditorThemePalette(
+                editorBackground: latteBase,
+                editorText: latteText,
+                secondaryText: latteSubtext1,
+                tertiaryText: latteSubtext0,
+                subduedText: latteSubtext0.withAlphaComponent(0.76),
+                linkText: latteSapphire,
+                caret: latteBlue,
+                sidebarBackground: latteMantle,
+                sidebarText: latteText,
+                sidebarBorder: latteSurface0.withAlphaComponent(0.68),
+                statusBarBackground: latteMantle,
+                statusBarText: latteSubtext1,
+                separator: latteCrust.withAlphaComponent(0.9),
+                codeBlockFill: latteSurface0.withAlphaComponent(0.24),
+                inlineCodeFill: latteSurface0.withAlphaComponent(0.38),
+                inlineCodeText: latteText,
+                fadeOverlayColor: latteBase,
+                fadeOverlayOpacity: 1.0,
+                monogramText: latteSubtext1,
+                monogramHoverFill: latteSurface0.withAlphaComponent(0.34),
+                monogramActiveFill: latteBlue.withAlphaComponent(0.18),
+                popoverLabelText: latteText,
+                popoverSecondaryText: latteSubtext1,
+                codeThemeName: "atom-one-light"
+            )
+
+        case .dark:
             return EditorThemePalette(
                 editorBackground: .textBackgroundColor,
                 editorText: .textColor,
@@ -189,6 +191,79 @@ enum EditorTheme: String, CaseIterable {
                 popoverSecondaryText: .secondaryLabelColor,
                 codeThemeName: "atom-one-dark"
             )
+
+        case .calm:
+            let parchment = NSColor.hex(0xF1E9D2)
+            let cafeNoir = NSColor.hex(0x4B3621)
+            let darkSepia = NSColor.hex(0x604830)
+            let sepia = NSColor.hex(0x80613C)
+            let paperBrown = NSColor.hex(0xB18C65)
+            let sepiaInk = NSColor.hex(0x74421C)
+            let sidebarBackground = parchment.blended(withFraction: 0.08, of: paperBrown) ?? parchment
+            let statusBarBackground = parchment.blended(withFraction: 0.12, of: paperBrown) ?? parchment
+
+            return EditorThemePalette(
+                editorBackground: parchment,
+                editorText: cafeNoir,
+                secondaryText: darkSepia,
+                tertiaryText: sepia,
+                subduedText: sepia.withAlphaComponent(0.78),
+                linkText: sepiaInk,
+                caret: sepiaInk,
+                sidebarBackground: sidebarBackground,
+                sidebarText: cafeNoir,
+                sidebarBorder: paperBrown.withAlphaComponent(0.42),
+                statusBarBackground: statusBarBackground,
+                statusBarText: darkSepia,
+                separator: paperBrown.withAlphaComponent(0.34),
+                codeBlockFill: cafeNoir.withAlphaComponent(0.05),
+                inlineCodeFill: paperBrown.withAlphaComponent(0.16),
+                inlineCodeText: sepiaInk,
+                fadeOverlayColor: parchment,
+                fadeOverlayOpacity: 1.0,
+                monogramText: darkSepia.withAlphaComponent(0.9),
+                monogramHoverFill: paperBrown.withAlphaComponent(0.14),
+                monogramActiveFill: paperBrown.withAlphaComponent(0.26),
+                popoverLabelText: cafeNoir,
+                popoverSecondaryText: darkSepia,
+                codeThemeName: "atom-one-light"
+            )
+
+        case .quiet:
+            let nord1 = NSColor.hex(0x3B4252)
+            let nord2 = NSColor.hex(0x434C5E)
+            let nord3 = NSColor.hex(0x4C566A)
+            let nord4 = NSColor.hex(0xD8DEE9)
+            let nord5 = NSColor.hex(0xE5E9F0)
+            let nord8 = NSColor.hex(0x88C0D0)
+            let nord9 = NSColor.hex(0x81A1C1)
+
+            return EditorThemePalette(
+                editorBackground: nord2,
+                editorText: nord4,
+                secondaryText: nord4.withAlphaComponent(0.84),
+                tertiaryText: nord4.withAlphaComponent(0.66),
+                subduedText: nord4.withAlphaComponent(0.52),
+                linkText: nord8,
+                caret: nord5,
+                sidebarBackground: nord1,
+                sidebarText: nord4,
+                sidebarBorder: nord3.withAlphaComponent(0.62),
+                statusBarBackground: nord1,
+                statusBarText: nord4.withAlphaComponent(0.78),
+                separator: nord3.withAlphaComponent(0.56),
+                codeBlockFill: nord1.withAlphaComponent(0.52),
+                inlineCodeFill: nord1.withAlphaComponent(0.7),
+                inlineCodeText: nord5,
+                fadeOverlayColor: nord2,
+                fadeOverlayOpacity: 1.0,
+                monogramText: nord4.withAlphaComponent(0.86),
+                monogramHoverFill: nord3.withAlphaComponent(0.34),
+                monogramActiveFill: nord9.withAlphaComponent(0.34),
+                popoverLabelText: nord5,
+                popoverSecondaryText: nord4.withAlphaComponent(0.78),
+                codeThemeName: "atom-one-dark"
+            )
         }
     }
 
@@ -196,7 +271,10 @@ enum EditorTheme: String, CaseIterable {
         let appearance = preferredAppearanceName.flatMap(NSAppearance.init(named:)) ?? NSApp.effectiveAppearance
         let palette = self.palette(for: appearance)
         let accent = palette.monogramActiveFill.blended(withFraction: 0.35, of: palette.linkText) ?? palette.linkText
-        return (palette.editorBackground, accent)
+        return (
+            resolvedPreviewColor(palette.editorBackground, for: appearance),
+            resolvedPreviewColor(accent, for: appearance)
+        )
     }
 }
 

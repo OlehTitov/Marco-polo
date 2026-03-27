@@ -42,7 +42,7 @@ final class Preferences {
         get {
             guard let rawValue = UserDefaults.standard.string(forKey: Keys.theme),
                   let theme = EditorTheme(rawValue: rawValue) else {
-                return .system
+                return .dark
             }
             return theme
         }
