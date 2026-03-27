@@ -1,7 +1,17 @@
 import AppKit
 import UniformTypeIdentifiers
 
-final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
+private func resolvedCGColor(_ color: NSColor, with appearance: NSAppearance) -> CGColor {
+    var resolvedColor = color.cgColor
+    if #available(macOS 11.0, *) {
+        appearance.performAsCurrentDrawingAppearance {
+            resolvedColor = color.cgColor
+        }
+    }
+    return resolvedColor
+}
+
+final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopoverDelegate {
     private let markdownStyling = MarkdownStyling()
     private let fencedCodeTracker = FencedCodeTracker()
     private let textContentStorage = NSTextContentStorage()
@@ -15,6 +25,9 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private var containerView: NSView?
     private var topFadeView: EdgeFadeView?
     private var bottomFadeView: EdgeFadeView?
+    private var customizationButton: MonogramButton?
+    private var customizationPopover: NSPopover?
+    private var customizationController: EditorCustomizationViewController?
 
     // Layout constraints for toggling
     private var scrollViewBottomConstraint: NSLayoutConstraint?
@@ -120,6 +133,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         // Container view
         let cv = NSView()
         cv.translatesAutoresizingMaskIntoConstraints = false
+        cv.wantsLayer = true
         window.contentView = cv
         containerView = cv
 
@@ -143,7 +157,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         cv.addSubview(sv)
 
         // Edge fade overlays (above scroll view in z-order)
-        let fadeHeight: CGFloat = 40
+        let fadeHeight: CGFloat = 112
         let topFade = EdgeFadeView(edge: .top)
         topFade.translatesAutoresizingMaskIntoConstraints = false
         cv.addSubview(topFade)
@@ -153,6 +167,35 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         bottomFade.translatesAutoresizingMaskIntoConstraints = false
         cv.addSubview(bottomFade)
         bottomFadeView = bottomFade
+
+        let customization = MonogramButton(frame: .zero)
+        customization.translatesAutoresizingMaskIntoConstraints = false
+        customization.target = self
+        customization.action = #selector(toggleCustomizationPopover(_:))
+        cv.addSubview(customization)
+        customizationButton = customization
+
+        let customizationVC = EditorCustomizationViewController()
+        customizationVC.onThemeChange = { theme in
+            Preferences.shared.theme = theme
+        }
+        customizationVC.onFontFamilyChange = { family in
+            Preferences.shared.fontFamily = family
+        }
+        customizationVC.onFontSizeChange = { size in
+            Preferences.shared.fontSize = size
+        }
+        customizationVC.onContentWidthChange = { width in
+            Preferences.shared.contentWidth = width
+        }
+        customizationController = customizationVC
+
+        let customizationPopover = NSPopover()
+        customizationPopover.animates = true
+        customizationPopover.behavior = .transient
+        customizationPopover.delegate = self
+        customizationPopover.contentViewController = customizationVC
+        self.customizationPopover = customizationPopover
 
         // Constraints
         let sidebarWidth = sidebar.widthAnchor.constraint(equalToConstant: 0)
@@ -193,7 +236,11 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
             bottomFade.bottomAnchor.constraint(equalTo: sv.bottomAnchor),
             bottomFade.leadingAnchor.constraint(equalTo: sv.leadingAnchor),
             bottomFade.trailingAnchor.constraint(equalTo: sv.trailingAnchor),
-            bottomFade.heightAnchor.constraint(equalToConstant: fadeHeight)
+            bottomFade.heightAnchor.constraint(equalToConstant: fadeHeight),
+
+            // Left-edge customization trigger
+            customization.leadingAnchor.constraint(equalTo: sv.leadingAnchor, constant: 12),
+            customization.centerYAnchor.constraint(equalTo: sv.centerYAnchor)
         ])
 
         let controller = NSWindowController(window: window)
@@ -215,6 +262,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         }
 
         updateTextInsets()
+        applyPreferences()
         editor.centerSelectionIfNeeded(animated: false)
 
 
@@ -239,8 +287,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         // Observe appearance changes for code highlight theme switching
         appearanceObserver = NSApp.observe(\.effectiveAppearance) { [weak self] _, _ in
             guard let self else { return }
-            self.markdownStyling.updateThemeIfNeeded()
-            self.invalidateAllParagraphs()
+            self.applyPreferences()
         }
     }
 
@@ -286,10 +333,9 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private func updateTextInsets() {
         guard let textView, let scrollView else { return }
         let availableWidth = scrollView.contentSize.width
-        let screenWidth = textView.window?.screen?.frame.width ?? NSScreen.main?.frame.width ?? 1440
-        let maxContentWidth = screenWidth / 2
         let minInset: CGFloat = 48
-        let inset = max(minInset, (availableWidth - maxContentWidth) / 2)
+        let desiredWidth = min(Preferences.shared.contentWidth.maxWidth, max(200, availableWidth - 2 * minInset))
+        let inset = max(minInset, (availableWidth - desiredWidth) / 2)
         textView.textContainerInset.width = inset
         textView.textContainer?.size.width = max(200, availableWidth - 2 * inset)
     }
@@ -377,6 +423,19 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
         Preferences.shared.isTypewriterScrollEnabled.toggle()
     }
 
+    @objc func toggleCustomizationPopover(_ sender: Any?) {
+        guard let customizationButton, let customizationPopover else { return }
+
+        if customizationPopover.isShown {
+            customizationPopover.performClose(sender)
+            return
+        }
+
+        customizationController?.refreshFromPreferences()
+        customizationButton.isPopoverShown = true
+        customizationPopover.show(relativeTo: customizationButton.bounds, of: customizationButton, preferredEdge: .maxX)
+    }
+
     override func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         if menuItem.action == #selector(toggleTypewriterScroll(_:)) {
             menuItem.state = Preferences.shared.isTypewriterScrollEnabled ? .on : .off
@@ -441,9 +500,31 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
     private func applyPreferences() {
         guard let textView else { return }
         let prefs = Preferences.shared
+        let window = windowControllers.first?.window
+
+        window?.appearance = prefs.theme.preferredAppearanceName.flatMap(NSAppearance.init(named:))
+        let appearance = window?.effectiveAppearance ?? textView.effectiveAppearance
+        let palette = prefs.themePalette(for: appearance)
+
+        markdownStyling.currentAppearance = appearance
+        markdownStyling.updateThemeIfNeeded()
         textView.font = prefs.font
+        textView.backgroundColor = palette.editorBackground
+        textView.insertionPointColor = palette.caret
+        textView.textColor = palette.editorText
+        scrollView?.backgroundColor = palette.editorBackground
+        containerView?.layer?.backgroundColor = resolvedCGColor(palette.editorBackground, with: appearance)
+        window?.backgroundColor = palette.editorBackground
+        outlineSidebar?.applyTheme(palette)
+        statusBarView?.applyTheme(palette)
+        topFadeView?.applyTheme(palette)
+        bottomFadeView?.applyTheme(palette)
+        customizationButton?.palette = palette
+        customizationController?.applyTheme(palette, appearanceName: prefs.theme.preferredAppearanceName)
+        customizationController?.refreshFromPreferences(prefs)
         updateTextInsets()
         textView.syncTypingAttributes()
+        textView.needsDisplay = true
         invalidateAllParagraphs()
     }
 
@@ -480,6 +561,10 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate {
             textView.centerSelectionIfNeeded(animated: true)
         }
     }
+
+    func popoverDidClose(_ notification: Notification) {
+        customizationButton?.isPopoverShown = false
+    }
 }
 
 // MARK: - Edge fade overlay
@@ -488,30 +573,83 @@ private final class EdgeFadeView: NSView {
     enum Edge { case top, bottom }
 
     private let edge: Edge
+    private let fillLayer = CALayer()
+    private let maskLayer = CAGradientLayer()
+    private var currentPalette: EditorThemePalette?
 
     init(edge: Edge) {
         self.edge = edge
         super.init(frame: .zero)
+
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.addSublayer(fillLayer)
+        fillLayer.mask = maskLayer
+        maskLayer.type = .axial
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let gradient = NSGradient(
-            starting: .textBackgroundColor,
-            ending: .textBackgroundColor.withAlphaComponent(0)
-        ) else { return }
+    override var isOpaque: Bool { false }
 
-        switch edge {
-        case .top:
-            gradient.draw(in: bounds, angle: 270) // opaque at top, transparent at bottom
-        case .bottom:
-            gradient.draw(in: bounds, angle: 90)  // opaque at bottom, transparent at top
-        }
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        fillLayer.frame = bounds
+        maskLayer.frame = bounds
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        layer?.contentsScale = scale
+        fillLayer.contentsScale = scale
+        maskLayer.contentsScale = scale
+        CATransaction.commit()
+        updateGradient()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil // click-through
+    }
+
+    func applyTheme(_ palette: EditorThemePalette) {
+        currentPalette = palette
+        updateGradient()
+    }
+
+    private func updateGradient() {
+        guard let currentPalette, bounds.width > 0, bounds.height > 0 else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let appearance = window?.effectiveAppearance ?? effectiveAppearance
+        fillLayer.backgroundColor = resolvedCGColor(currentPalette.fadeOverlayColor, with: appearance)
+        let stops = Self.gradientStops(maxOpacity: currentPalette.fadeOverlayOpacity)
+        maskLayer.colors = stops.colors
+        maskLayer.locations = stops.locations
+        switch edge {
+        case .top:
+            maskLayer.startPoint = CGPoint(x: 0.5, y: 1)
+            maskLayer.endPoint = CGPoint(x: 0.5, y: 0)
+        case .bottom:
+            maskLayer.startPoint = CGPoint(x: 0.5, y: 0)
+            maskLayer.endPoint = CGPoint(x: 0.5, y: 1)
+        }
+        CATransaction.commit()
+    }
+
+    private static func gradientStops(maxOpacity: CGFloat) -> (colors: [CGColor], locations: [NSNumber]) {
+        let sampleCount = 14
+        var colors: [CGColor] = []
+        var locations: [NSNumber] = []
+
+        for index in 0..<sampleCount {
+            let t = CGFloat(index) / CGFloat(sampleCount - 1)
+            let smooth = t * t * (3 - (2 * t))
+            let alpha = pow(1 - smooth, 1.35) * maxOpacity
+            colors.append(NSColor.white.withAlphaComponent(alpha).cgColor)
+            locations.append(NSNumber(value: Double(t)))
+        }
+
+        return (colors, locations)
     }
 }

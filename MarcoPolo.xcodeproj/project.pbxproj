@@ -21,6 +21,8 @@
 		A0000000000000000000001D /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000201 /* Highlightr */; };
 		A0000000000000000000001E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000108 /* Assets.xcassets */; };
 		A0000000000000000000001F /* HeadingGutterAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000109 /* HeadingGutterAnimator.swift */; };
+		A00000000000000000000023 /* EditorAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000010A /* EditorAppearance.swift */; };
+		A00000000000000000000024 /* EditorCustomizationPopover.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000010B /* EditorCustomizationPopover.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +43,8 @@
 		A00000000000000000000107 /* MarkdownExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownExporter.swift; sourceTree = "<group>"; };
 		A00000000000000000000108 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A00000000000000000000109 /* HeadingGutterAnimator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadingGutterAnimator.swift; sourceTree = "<group>"; };
+		A0000000000000000000010A /* EditorAppearance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorAppearance.swift; sourceTree = "<group>"; };
+		A0000000000000000000010B /* EditorCustomizationPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCustomizationPopover.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +73,8 @@
 				A00000000000000000000001 /* AppDelegate.swift */,
 				A00000000000000000000108 /* Assets.xcassets */,
 				A00000000000000000000002 /* Document.swift */,
+				A0000000000000000000010A /* EditorAppearance.swift */,
+				A0000000000000000000010B /* EditorCustomizationPopover.swift */,
 				A00000000000000000000004 /* EditorTextView.swift */,
 				A00000000000000000000103 /* FencedCodeTracker.swift */,
 				A00000000000000000000104 /* FormattingCommands.swift */,
@@ -171,6 +177,8 @@
 			files = (
 				A00000000000000000000011 /* AppDelegate.swift in Sources */,
 				A00000000000000000000012 /* Document.swift in Sources */,
+				A00000000000000000000023 /* EditorAppearance.swift in Sources */,
+				A00000000000000000000024 /* EditorCustomizationPopover.swift in Sources */,
 				A00000000000000000000014 /* EditorTextView.swift in Sources */,
 				A00000000000000000000018 /* FencedCodeTracker.swift in Sources */,
 				A00000000000000000000019 /* FormattingCommands.swift in Sources */,

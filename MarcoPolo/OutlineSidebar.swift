@@ -36,6 +36,7 @@ final class OutlineSidebar: NSView {
     }
 
     private func setup() {
+        wantsLayer = true
         let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("heading"))
         column.title = "Outline"
         column.resizingMask = .autoresizingMask
@@ -65,6 +66,15 @@ final class OutlineSidebar: NSView {
             scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
+    }
+
+    func applyTheme(_ palette: EditorThemePalette) {
+        layer?.backgroundColor = palette.sidebarBackground.cgColor
+        layer?.borderColor = palette.sidebarBorder.cgColor
+        layer?.borderWidth = 1
+        scrollView.backgroundColor = palette.sidebarBackground
+        outlineView.backgroundColor = palette.sidebarBackground
+        outlineView.reloadData()
     }
 
     // MARK: - Rebuild outline
@@ -183,7 +193,8 @@ extension OutlineSidebar: NSOutlineViewDelegate {
         let fontSize: CGFloat = heading.level <= 2 ? 13 : 11
         let weight: NSFont.Weight = heading.level <= 2 ? .semibold : .regular
         cell.textField?.font = NSFont.systemFont(ofSize: fontSize, weight: weight)
-        cell.textField?.textColor = .labelColor
+        let palette = Preferences.shared.themePalette(for: effectiveAppearance)
+        cell.textField?.textColor = palette.sidebarText
 
         return cell
     }

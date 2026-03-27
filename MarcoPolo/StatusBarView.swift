@@ -15,6 +15,7 @@ final class StatusBarView: NSView {
     }
 
     private func setup() {
+        wantsLayer = true
         label.font = NSFont.systemFont(ofSize: 11, weight: .regular)
         label.textColor = .secondaryLabelColor
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -29,6 +30,11 @@ final class StatusBarView: NSView {
 
     override var intrinsicContentSize: NSSize {
         NSSize(width: NSView.noIntrinsicMetric, height: 20)
+    }
+
+    func applyTheme(_ palette: EditorThemePalette) {
+        layer?.backgroundColor = palette.statusBarBackground.cgColor
+        label.textColor = palette.statusBarText
     }
 
     func updateCounts(text: String) {

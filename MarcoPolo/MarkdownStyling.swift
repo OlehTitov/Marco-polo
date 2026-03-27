@@ -84,6 +84,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
     var fencedCodeTracker: FencedCodeTracker?
     var isFocusModeEnabled = false
     var focusedParagraphLocation: Int?
+    var currentAppearance: NSAppearance = NSApp.effectiveAppearance
 
     // MARK: - Highlightr
 
@@ -100,8 +101,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
     private var appliedThemeName: String?
 
     private var currentThemeName: String {
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        return isDark ? "atom-one-dark" : "atom-one-light"
+        prefs.themePalette(for: currentAppearance).codeThemeName
     }
 
     func clearHighlightCache() {
@@ -131,6 +131,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         let nsLine = line as NSString
         let fullRange = NSRange(location: 0, length: nsLine.length)
         let styled = NSMutableAttributedString(string: line)
+        let palette = prefs.themePalette(for: currentAppearance)
 
         let isInFenced = fencedCodeTracker?.isInsideFencedCode(paragraphLocation: range.location) ?? false
         let element = MarkdownPatterns.paragraphType(for: line, isInFencedCode: isInFenced)
@@ -140,27 +141,27 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         // Base attributes
         styled.setAttributes([
             .font: font,
-            .foregroundColor: NSColor.textColor,
+            .foregroundColor: palette.editorText,
             .paragraphStyle: paraStyle
         ], range: fullRange)
 
         // Apply block-level style
         applyBlockStyle(element, to: styled, fullRange: fullRange, font: font,
-                        documentRange: range, textStorage: textStorage)
+                        documentRange: range, textStorage: textStorage, palette: palette)
 
         // Apply inline styles (skip inside fenced code body)
         switch element {
         case .fencedCodeBody, .fencedCodeFence(_):
             break
         default:
-            applyInlineStyles(to: styled, line: line, fullRange: fullRange, font: font)
+            applyInlineStyles(to: styled, line: line, fullRange: fullRange, font: font, palette: palette)
         }
 
         // Focus mode dimming
         if isFocusModeEnabled {
             let isFocused = isFocusedParagraph(range: range)
             if !isFocused {
-                styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: fullRange)
+                styled.addAttribute(.foregroundColor, value: palette.subduedText, range: fullRange)
             }
         }
 
@@ -175,25 +176,26 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         fullRange: NSRange,
         font: NSFont,
         documentRange: NSRange,
-        textStorage: NSTextStorage
+        textStorage: NSTextStorage,
+        palette: EditorThemePalette
     ) {
         switch element {
         case .heading(let level):
             let prefixLen = level + 1
             if prefixLen <= fullRange.length {
-                styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor,
+                styled.addAttribute(.foregroundColor, value: palette.tertiaryText,
                                     range: NSRange(location: 0, length: prefixLen))
             }
 
         case .blockquote:
-            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
 
         case .fencedCodeFence(_):
-            styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.tertiaryText, range: fullRange)
 
         case .fencedCodeBody:
             applyCodeHighlighting(to: styled, fullRange: fullRange, font: font,
-                                  documentRange: documentRange, textStorage: textStorage)
+                                  documentRange: documentRange, textStorage: textStorage, palette: palette)
 
         case .orderedList, .unorderedList:
             break
@@ -201,13 +203,13 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         case .taskList(let checked, _):
             if checked {
                 styled.addAttributes([
-                    .foregroundColor: NSColor.secondaryLabelColor,
+                    .foregroundColor: palette.secondaryText,
                     .strikethroughStyle: NSUnderlineStyle.single.rawValue
                 ], range: fullRange)
             }
 
         case .horizontalRule:
-            styled.addAttribute(.foregroundColor, value: NSColor.separatorColor, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.separator, range: fullRange)
 
         case .plain:
             break
@@ -221,14 +223,15 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         fullRange: NSRange,
         font: NSFont,
         documentRange: NSRange,
-        textStorage: NSTextStorage
+        textStorage: NSTextStorage,
+        palette: EditorThemePalette
     ) {
         guard let tracker = fencedCodeTracker,
               let info = tracker.codeBlockInfo(forParagraphAt: documentRange.location),
               info.codeRange.length > 0,
               let highlightr else {
             // Fall back to default grey
-            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
             return
         }
 
@@ -243,7 +246,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         }
 
         guard let cached = highlightCache[cacheKey] else {
-            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
             return
         }
 
@@ -253,14 +256,14 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         let cachedLength = cachedString.length
 
         guard offsetInBlock >= 0, offsetInBlock < cachedLength else {
-            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
             return
         }
 
         // The paragraph length in the cached string (may differ slightly due to trailing newline)
         let availableLength = min(fullRange.length, cachedLength - offsetInBlock)
         guard availableLength > 0 else {
-            styled.addAttribute(.foregroundColor, value: NSColor.secondaryLabelColor, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
             return
         }
 
@@ -284,7 +287,8 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         to styled: NSMutableAttributedString,
         line: String,
         fullRange: NSRange,
-        font: NSFont
+        font: NSFont,
+        palette: EditorThemePalette
     ) {
         // Collect code span ranges to protect them from other patterns
         var codeRanges: [NSRange] = []
@@ -292,7 +296,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         // 1. Inline code (first, to protect from other patterns)
         for match in MarkdownPatterns.inlineCode.matches(in: line, range: fullRange) {
             let matchRange = match.range
-            styled.addAttribute(.foregroundColor, value: NSColor.systemOrange, range: matchRange)
+            styled.addAttribute(.foregroundColor, value: palette.inlineCodeText, range: matchRange)
             codeRanges.append(matchRange)
         }
 
@@ -325,7 +329,7 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
             let matchRange = match.range
             guard !overlapsCode(matchRange, codeRanges: codeRanges) else { continue }
             styled.addAttributes([
-                .foregroundColor: NSColor.secondaryLabelColor,
+                .foregroundColor: palette.secondaryText,
                 .strikethroughStyle: NSUnderlineStyle.single.rawValue
             ], range: matchRange)
         }
@@ -336,10 +340,10 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
             let textRange = match.range(at: 1)
             let urlRange = match.range(at: 2)
             // Style the bracket/paren delimiters + url as dim
-            styled.addAttribute(.foregroundColor, value: NSColor.tertiaryLabelColor, range: match.range)
+            styled.addAttribute(.foregroundColor, value: palette.tertiaryText, range: match.range)
             // Style the text portion as link
             styled.addAttributes([
-                .foregroundColor: NSColor.linkColor,
+                .foregroundColor: palette.linkText,
                 .underlineStyle: NSUnderlineStyle.single.rawValue
             ], range: textRange)
             // URL stays dim (already set on full range)

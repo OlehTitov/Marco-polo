@@ -60,10 +60,8 @@ final class EditorTextView: NSTextView {
 
         let origin = textContainerOrigin
         let textMargin = TextMetrics.textMargin(for: Preferences.shared.font)
-
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let bgColor = isDark ? NSColor.white.withAlphaComponent(0.03)
-                             : NSColor.black.withAlphaComponent(0.03)
+        let palette = Preferences.shared.themePalette(for: effectiveAppearance)
+        let bgColor = palette.codeBlockFill
 
         for pair in tracker.fenceRanges {
             guard let close = pair.close else { continue }
@@ -133,9 +131,8 @@ final class EditorTextView: NSTextView {
         let str = ts.string as NSString
         let vpNSRange = NSRange(location: vpStart, length: min(vpEnd - vpStart, str.length - vpStart))
 
-        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        let bgColor = isDark ? NSColor.white.withAlphaComponent(0.08)
-                             : NSColor.black.withAlphaComponent(0.06)
+        let palette = Preferences.shared.themePalette(for: effectiveAppearance)
+        let bgColor = palette.inlineCodeFill
 
         let origin = textContainerOrigin
         let vExpand: CGFloat = 2
@@ -318,11 +315,12 @@ final class EditorTextView: NSTextView {
         let element = currentParagraphElement()
         let font = EditorTypography.font(for: element, preferences: prefs)
         let style = EditorTypography.paragraphStyle(for: element, preferences: prefs)
+        let palette = prefs.themePalette(for: effectiveAppearance)
 
         var attrs = typingAttributes
         attrs[.paragraphStyle] = style
         attrs[.font] = font
-        attrs[.foregroundColor] = NSColor.textColor
+        attrs[.foregroundColor] = palette.editorText
         typingAttributes = attrs
     }
 

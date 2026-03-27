@@ -14,6 +14,8 @@ final class Preferences {
     private enum Keys {
         static let fontFamily = "fontFamily"
         static let fontSize = "fontSize"
+        static let theme = "theme"
+        static let contentWidth = "contentWidth"
         static let typewriterScroll = "typewriterScroll"
     }
 
@@ -36,6 +38,34 @@ final class Preferences {
         }
     }
 
+    var theme: EditorTheme {
+        get {
+            guard let rawValue = UserDefaults.standard.string(forKey: Keys.theme),
+                  let theme = EditorTheme(rawValue: rawValue) else {
+                return .system
+            }
+            return theme
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Keys.theme)
+            postChange()
+        }
+    }
+
+    var contentWidth: EditorContentWidth {
+        get {
+            guard let rawValue = UserDefaults.standard.string(forKey: Keys.contentWidth),
+                  let width = EditorContentWidth(rawValue: rawValue) else {
+                return .balanced
+            }
+            return width
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Keys.contentWidth)
+            postChange()
+        }
+    }
+
     var isTypewriterScrollEnabled: Bool {
         get {
             if UserDefaults.standard.object(forKey: Keys.typewriterScroll) == nil {
@@ -50,8 +80,11 @@ final class Preferences {
     }
 
     var font: NSFont {
-        NSFont(name: fontFamily, size: fontSize)
-            ?? NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
+        if let resolvedFont = EditorFontCatalog.font(for: fontFamily, size: fontSize) {
+            return resolvedFont
+        }
+
+        return NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular)
     }
 
     var boldFont: NSFont {
@@ -68,6 +101,11 @@ final class Preferences {
         let manager = NSFontManager.shared
         let bold = manager.convert(font, toHaveTrait: .boldFontMask)
         return manager.convert(bold, toHaveTrait: .italicFontMask)
+    }
+
+    func themePalette(for appearance: NSAppearance? = nil) -> EditorThemePalette {
+        let resolvedAppearance = appearance ?? NSApp.effectiveAppearance
+        return theme.palette(for: resolvedAppearance)
     }
 
     private func postChange() {
