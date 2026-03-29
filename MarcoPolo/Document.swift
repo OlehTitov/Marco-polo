@@ -84,6 +84,8 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
 
         // TextKit 2 stack
         let textLayoutManager = NSTextLayoutManager()
+        textLayoutManager.usesFontLeading = false
+        textLayoutManager.delegate = markdownStyling
         textContentStorage.delegate = markdownStyling
         textContentStorage.addTextLayoutManager(textLayoutManager)
 
@@ -512,6 +514,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
         textView.backgroundColor = palette.editorBackground
         textView.insertionPointColor = palette.caret
         textView.textColor = palette.editorText
+        textView.applyTheme(palette)
         scrollView?.backgroundColor = palette.editorBackground
         containerView?.layer?.backgroundColor = resolvedCGColor(palette.editorBackground, with: appearance)
         window?.backgroundColor = palette.editorBackground

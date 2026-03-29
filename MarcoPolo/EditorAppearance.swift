@@ -46,6 +46,7 @@ enum EditorContentWidth: String, CaseIterable {
 struct EditorThemePalette {
     let editorBackground: NSColor
     let editorText: NSColor
+    let selectionFill: NSColor
     let secondaryText: NSColor
     let tertiaryText: NSColor
     let subduedText: NSColor
@@ -102,6 +103,7 @@ enum EditorTheme: String, CaseIterable {
             return EditorThemePalette(
                 editorBackground: .textBackgroundColor,
                 editorText: .labelColor,
+                selectionFill: .selectedContentBackgroundColor.withAlphaComponent(0.26),
                 secondaryText: .secondaryLabelColor,
                 tertiaryText: .tertiaryLabelColor,
                 subduedText: .tertiaryLabelColor,
@@ -140,6 +142,7 @@ enum EditorTheme: String, CaseIterable {
             return EditorThemePalette(
                 editorBackground: latteBase,
                 editorText: latteText,
+                selectionFill: latteBlue.withAlphaComponent(0.18),
                 secondaryText: latteSubtext1,
                 tertiaryText: latteSubtext0,
                 subduedText: latteSubtext0.withAlphaComponent(0.76),
@@ -168,6 +171,7 @@ enum EditorTheme: String, CaseIterable {
             return EditorThemePalette(
                 editorBackground: .textBackgroundColor,
                 editorText: .textColor,
+                selectionFill: .selectedContentBackgroundColor.withAlphaComponent(0.28),
                 secondaryText: .secondaryLabelColor,
                 tertiaryText: .tertiaryLabelColor,
                 subduedText: .tertiaryLabelColor,
@@ -205,6 +209,7 @@ enum EditorTheme: String, CaseIterable {
             return EditorThemePalette(
                 editorBackground: parchment,
                 editorText: cafeNoir,
+                selectionFill: paperBrown.withAlphaComponent(0.22),
                 secondaryText: darkSepia,
                 tertiaryText: sepia,
                 subduedText: sepia.withAlphaComponent(0.78),
@@ -241,6 +246,7 @@ enum EditorTheme: String, CaseIterable {
             return EditorThemePalette(
                 editorBackground: nord2,
                 editorText: nord4,
+                selectionFill: nord8.withAlphaComponent(0.24),
                 secondaryText: nord4.withAlphaComponent(0.84),
                 tertiaryText: nord4.withAlphaComponent(0.66),
                 subduedText: nord4.withAlphaComponent(0.52),

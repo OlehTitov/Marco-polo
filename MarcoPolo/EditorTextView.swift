@@ -3,6 +3,9 @@ import AppKit
 final class EditorTextView: NSTextView {
 
     var fencedCodeTracker: FencedCodeTracker?
+    private var selectionFillColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.26)
+    private let geometryLoggingEnabled = true
+    private var lastLoggedCursorRect: NSRect = .zero
 
     // MARK: - Insertion point
 
@@ -11,6 +14,7 @@ final class EditorTextView: NSTextView {
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
         let cursorRect = resolvedInsertionPointRect(from: rect)
+        debugLogInsertionGeometryIfNeeded(sourceRect: rect, resolvedRect: cursorRect)
 
         if lastCursorRect != .zero {
             setNeedsDisplay(lastCursorRect, avoidAdditionalLayout: true)
@@ -43,6 +47,7 @@ final class EditorTextView: NSTextView {
         super.drawBackground(in: rect)
         drawCodeBlockBackgrounds(in: rect)
         drawInlineCodeBackgrounds(in: rect)
+        drawSelectionHighlights(in: rect)
     }
 
     private func drawCodeBlockBackgrounds(in dirtyRect: NSRect) {
@@ -175,6 +180,39 @@ final class EditorTextView: NSTextView {
                     return true
                 }
             }
+        }
+    }
+
+    private func drawSelectionHighlights(in dirtyRect: NSRect) {
+        guard let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager,
+              let viewportRange = tlm.textViewportLayoutController.viewportRange else { return }
+
+        let viewportStart = tcm.offset(from: tcm.documentRange.location, to: viewportRange.location)
+        let viewportEnd = tcm.offset(from: tcm.documentRange.location, to: viewportRange.endLocation)
+        guard viewportStart != NSNotFound, viewportEnd != NSNotFound, viewportEnd >= viewportStart else { return }
+
+        let viewportNSRange = NSRange(location: viewportStart, length: viewportEnd - viewportStart)
+        let origin = textContainerOrigin
+
+        for selectedValue in selectedRanges {
+            let selectedRange = selectedValue.rangeValue
+            guard selectedRange.length > 0,
+                  let visibleRange = intersection(selectedRange, viewportNSRange),
+                  let start = tcm.location(tcm.documentRange.location, offsetBy: visibleRange.location),
+                  let end = tcm.location(start, offsetBy: visibleRange.length),
+                  let textRange = NSTextRange(location: start, end: end) else {
+                continue
+            }
+
+            var highlightRects: [NSRect] = []
+            tlm.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, segmentFrame, _, _ in
+                guard segmentFrame.width > 0 else { return true }
+                highlightRects.append(self.selectionRect(for: segmentFrame, origin: origin))
+                return true
+            }
+
+            drawSelectionRects(highlightRects, in: dirtyRect)
         }
     }
 
@@ -324,6 +362,12 @@ final class EditorTextView: NSTextView {
         typingAttributes = attrs
     }
 
+    func applyTheme(_ palette: EditorThemePalette) {
+        selectionFillColor = palette.selectionFill
+        selectedTextAttributes = [:]
+        needsDisplay = true
+    }
+
     // MARK: - Typewriter scroll
 
     override func didChangeText() {
@@ -337,6 +381,8 @@ final class EditorTextView: NSTextView {
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting flag: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
         syncTypingAttributes()
+        needsDisplay = true
+        debugLogSelectionGeometryIfNeeded()
         if Preferences.shared.isTypewriterScrollEnabled {
             centerSelectionIfNeeded(animated: false)
         }
@@ -356,9 +402,16 @@ final class EditorTextView: NSTextView {
         }
 
         let selectedRange = selectedRange()
-        let rect = cursorRect(for: selectedRange, using: tlm)
-            ?? insertionPointFallbackRect(for: selectedRange, using: tlm)
-            ?? .zero
+        let rect: NSRect
+        if selectedRange.length == 0 {
+            rect = insertionPointRect(for: selectedRange, using: tlm)
+                ?? insertionPointFallbackRect(for: selectedRange, using: tlm)
+                ?? .zero
+        } else {
+            rect = selectionRect(for: selectedRange, using: tlm)
+                ?? insertionPointFallbackRect(for: selectedRange, using: tlm)
+                ?? .zero
+        }
 
         guard rect != .zero else { return }
 
@@ -390,35 +443,71 @@ final class EditorTextView: NSTextView {
     }
 
     private func resolvedInsertionPointRect(from rect: NSRect) -> NSRect {
-        let rawHeight = rect.height > 0 ? rect.height : EditorTypography.fallbackCaretHeight(for: Preferences.shared.font)
+        let baseRect: NSRect
+        if let tlm = textLayoutManager {
+            let selection = selectedRange()
+            baseRect = insertionPointRect(for: selection, using: tlm)
+                ?? insertionPointFallbackRect(for: selection, using: tlm)
+                ?? rect
+        } else {
+            baseRect = rect
+        }
+
+        let rawHeight = baseRect.height > 0 ? baseRect.height : EditorTypography.fallbackCaretHeight(for: Preferences.shared.font)
         let drawHeight = max(2, floor(rawHeight))
-        let drawY = rect.origin.y + ((rawHeight - drawHeight) / 2.0)
+        let drawY = baseRect.origin.y + ((rawHeight - drawHeight) / 2.0)
 
         return NSRect(
-            x: rect.origin.x,
+            x: baseRect.origin.x,
             y: drawY,
             width: cursorWidth,
             height: drawHeight
         ).integral
     }
 
-    private func cursorRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
+    private func selectionRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
         guard let contentManager = tlm.textContentManager,
               let start = contentManager.location(contentManager.documentRange.location, offsetBy: nsRange.location),
-              let end = contentManager.location(start, offsetBy: max(nsRange.length, 1)) else {
+              let end = contentManager.location(start, offsetBy: nsRange.length) else {
             return nil
         }
 
         guard let textRange = NSTextRange(location: start, end: end) else { return nil }
         var result: NSRect?
+        let origin = textContainerOrigin
 
         tlm.enumerateTextSegments(in: textRange, type: .selection, options: []) { _, segmentFrame, _, _ in
+            guard segmentFrame.width > 0 else { return true }
+
+            let displayRect = self.selectionRect(for: segmentFrame, origin: origin)
+
             if let current = result {
-                result = current.union(segmentFrame)
+                result = current.union(displayRect)
             } else {
-                result = segmentFrame
+                result = displayRect
             }
             return true
+        }
+
+        return result
+    }
+
+    private func insertionPointRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
+        guard nsRange.length == 0,
+              let contentManager = tlm.textContentManager,
+              let location = contentManager.location(contentManager.documentRange.location, offsetBy: nsRange.location),
+              let textRange = NSTextRange(location: location, end: location) else {
+            return nil
+        }
+
+        var result: NSRect?
+        tlm.enumerateTextSegments(
+            in: textRange,
+            type: .standard,
+            options: [.rangeNotRequired, .upstreamAffinity]
+        ) { _, segmentFrame, _, _ in
+            result = self.caretRect(for: segmentFrame)
+            return false
         }
 
         return result
@@ -436,6 +525,161 @@ final class EditorTextView: NSTextView {
         }
 
         return nil
+    }
+
+    private func intersection(_ lhs: NSRange, _ rhs: NSRange) -> NSRange? {
+        let start = max(lhs.location, rhs.location)
+        let end = min(NSMaxRange(lhs), NSMaxRange(rhs))
+        guard end > start else { return nil }
+        return NSRange(location: start, length: end - start)
+    }
+
+    private func selectionRect(for segmentFrame: NSRect, origin: NSPoint) -> NSRect {
+        var rect = segmentFrame
+        rect.origin.x += origin.x
+        rect.origin.y += origin.y
+        return rect.standardized
+    }
+
+    private func drawSelectionRects(_ rects: [NSRect], in dirtyRect: NSRect) {
+        selectionFillColor.setFill()
+        for rect in rects where rect.width > 0 && rect.height > 0 && rect.intersects(dirtyRect) {
+            NSBezierPath(rect: rect).fill()
+        }
+    }
+
+    private func caretRect(for segmentFrame: NSRect) -> NSRect {
+        return NSRect(
+            x: segmentFrame.minX,
+            y: segmentFrame.minY,
+            width: cursorWidth,
+            height: max(2, segmentFrame.height)
+        ).integral
+    }
+
+    private func fontForCaret(at location: Int) -> NSFont {
+        fontAtCharacterOffset(max(0, location - (location > 0 ? 1 : 0)))
+    }
+
+    private func fontAtCharacterOffset(_ location: Int) -> NSFont {
+        guard let textStorage, textStorage.length > 0 else {
+            return Preferences.shared.font
+        }
+
+        let clamped = min(max(location, 0), textStorage.length - 1)
+        return (textStorage.attribute(.font, at: clamped, effectiveRange: nil) as? NSFont) ?? Preferences.shared.font
+    }
+
+    private func paragraphStyleAtCharacterOffset(_ location: Int) -> NSParagraphStyle? {
+        guard let textStorage, textStorage.length > 0 else {
+            return nil
+        }
+
+        let clamped = min(max(location, 0), textStorage.length - 1)
+        return textStorage.attribute(.paragraphStyle, at: clamped, effectiveRange: nil) as? NSParagraphStyle
+    }
+
+    private func documentOffset(for location: (any NSTextLocation)?) -> Int? {
+        guard let location,
+              let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager else {
+            return nil
+        }
+
+        let offset = tcm.offset(from: tcm.documentRange.location, to: location)
+        return offset == NSNotFound ? nil : offset
+    }
+
+    private func debugLogSelectionGeometryIfNeeded() {
+        guard geometryLoggingEnabled,
+              let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager else { return }
+
+        let ranges = selectedRanges.map(\.rangeValue)
+        NSLog("[Geometry] selection changed ranges=%@", String(describing: ranges))
+
+        for selectedRange in ranges where selectedRange.length > 0 {
+            guard let start = tcm.location(tcm.documentRange.location, offsetBy: selectedRange.location),
+                  let end = tcm.location(start, offsetBy: selectedRange.length),
+                  let textRange = NSTextRange(location: start, end: end) else {
+                continue
+            }
+
+            tlm.enumerateTextSegments(in: textRange, type: .selection, options: []) { (segmentRange: NSTextRange?, segmentFrame: CGRect, _: CGFloat, _: NSTextContainer) -> Bool in
+                guard segmentFrame.width > 0 else { return true }
+
+                let offset = self.documentOffset(for: segmentRange?.location) ?? selectedRange.location
+                let font = self.fontAtCharacterOffset(offset)
+                let paragraphStyle = self.paragraphStyleAtCharacterOffset(offset)
+                let drawnRect = self.selectionRect(for: segmentFrame, origin: self.textContainerOrigin)
+                let fragmentDebug = self.lineFragmentDebugDescription(at: offset)
+                let rangeDescription: String
+                if let segmentRange,
+                   let endOffset = self.documentOffset(for: segmentRange.endLocation) {
+                    rangeDescription = "{\(offset),\(max(0, endOffset - offset))}"
+                } else {
+                    rangeDescription = "{\(offset),?}"
+                }
+
+                NSLog("""
+                [Geometry][Selection]
+                  range=\(rangeDescription)
+                  font=\(font.fontName) size=\(String(format: "%.2f", font.pointSize))
+                  asc=\(String(format: "%.2f", font.ascender)) desc=\(String(format: "%.2f", font.descender)) leading=\(String(format: "%.2f", font.leading))
+                  fixedLineHeight=\(String(format: "%.2f", EditorTypography.fixedLineHeight(for: font))) lineHeightMultiple=\(String(format: "%.2f", EditorTypography.normalizedLineHeightMultiple(for: paragraphStyle)))
+                  segmentFrame=\(NSStringFromRect(segmentFrame))
+                  drawnSelectionRect=\(NSStringFromRect(drawnRect))
+                  \(fragmentDebug)
+                """)
+                return true
+            }
+        }
+    }
+
+    private func debugLogInsertionGeometryIfNeeded(sourceRect: NSRect, resolvedRect: NSRect) {
+        guard geometryLoggingEnabled,
+              resolvedRect != lastLoggedCursorRect,
+              let tlm = textLayoutManager,
+              let selectedRange = selectedRanges.first?.rangeValue,
+              selectedRange.length == 0,
+              let insertionRect = insertionPointRect(for: selectedRange, using: tlm) else {
+            return
+        }
+
+        let font = fontForCaret(at: selectedRange.location)
+        let paragraphStyle = paragraphStyleAtCharacterOffset(selectedRange.location)
+        let fragmentDebug = lineFragmentDebugDescription(at: selectedRange.location)
+
+        NSLog("""
+        [Geometry][Caret]
+          location=\(selectedRange.location)
+          font=\(font.fontName) size=\(String(format: "%.2f", font.pointSize))
+          asc=\(String(format: "%.2f", font.ascender)) desc=\(String(format: "%.2f", font.descender)) leading=\(String(format: "%.2f", font.leading))
+          fixedLineHeight=\(String(format: "%.2f", EditorTypography.fixedLineHeight(for: font))) lineHeightMultiple=\(String(format: "%.2f", EditorTypography.normalizedLineHeightMultiple(for: paragraphStyle)))
+          sourceRect=\(NSStringFromRect(sourceRect))
+          insertionRect=\(NSStringFromRect(insertionRect))
+          resolvedCursorRect=\(NSStringFromRect(resolvedRect))
+          \(fragmentDebug)
+        """)
+
+        lastLoggedCursorRect = resolvedRect
+    }
+
+    private func lineFragmentDebugDescription(at location: Int) -> String {
+        guard let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager,
+              let textLocation = tcm.location(tcm.documentRange.location, offsetBy: location),
+              let layoutFragment = tlm.textLayoutFragment(for: textLocation),
+              let lineFragment = layoutFragment.textLineFragment(for: textLocation, isUpstreamAffinity: location > 0) else {
+            return "layoutFragment=nil"
+        }
+
+        return """
+        layoutFragmentFrame=\(NSStringFromRect(layoutFragment.layoutFragmentFrame))
+        renderingSurfaceBounds=\(NSStringFromRect(layoutFragment.renderingSurfaceBounds))
+        lineTypographicBounds=\(NSStringFromRect(lineFragment.typographicBounds))
+        glyphOrigin=\(NSStringFromPoint(lineFragment.glyphOrigin))
+        """
     }
 
 }

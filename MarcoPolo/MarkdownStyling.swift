@@ -64,7 +64,21 @@ enum EditorTypography {
     }
 
     static func fallbackCaretHeight(for font: NSFont) -> CGFloat {
-        ceil(font.ascender - font.descender + font.leading)
+        fixedLineHeight(for: font)
+    }
+
+    static func fixedLineHeight(for font: NSFont) -> CGFloat {
+        let textHeight = ceil(font.ascender - font.descender)
+        return ceil(textHeight * bodyLineHeightMultiple)
+    }
+
+    static func normalizedLineHeightMultiple(for paragraphStyle: NSParagraphStyle?) -> CGFloat {
+        let multiple = paragraphStyle?.lineHeightMultiple ?? 0
+        return multiple > 0 ? multiple : 1.0
+    }
+
+    static func lineFragmentDrawOffset(for lineFragment: NSTextLineFragment, paragraphStyle: NSParagraphStyle?) -> CGFloat {
+        -(lineFragment.typographicBounds.height * (normalizedLineHeightMultiple(for: paragraphStyle) - 1.0) / 2.0)
     }
 
     private static func headingSpacingBefore(for level: Int) -> CGFloat {
@@ -80,7 +94,51 @@ enum EditorTypography {
     }
 }
 
-final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
+private final class EditorTextLayoutFragment: NSTextLayoutFragment {
+    private let defaultParagraphStyle: NSParagraphStyle
+
+    init(textElement: NSTextElement, range rangeInElement: NSTextRange?, defaultParagraphStyle: NSParagraphStyle) {
+        self.defaultParagraphStyle = defaultParagraphStyle
+        super.init(textElement: textElement, range: rangeInElement)
+    }
+
+    required init?(coder: NSCoder) {
+        self.defaultParagraphStyle = NSParagraphStyle.default
+        super.init(coder: coder)
+    }
+
+    override func draw(at point: CGPoint, in context: CGContext) {
+        guard state.rawValue >= NSTextLayoutFragment.State.layoutAvailable.rawValue else {
+            super.draw(at: point, in: context)
+            return
+        }
+
+        context.saveGState()
+
+        for lineFragment in textLineFragments {
+            let paragraphStyle: NSParagraphStyle
+            if lineFragment.attributedString.length > 0,
+               let lineParagraphStyle = lineFragment.attributedString.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle {
+                paragraphStyle = lineParagraphStyle
+            } else {
+                paragraphStyle = defaultParagraphStyle
+            }
+
+            let offset = EditorTypography.lineFragmentDrawOffset(for: lineFragment, paragraphStyle: paragraphStyle)
+            lineFragment.draw(
+                at: CGPoint(
+                    x: point.x + lineFragment.typographicBounds.origin.x,
+                    y: point.y + lineFragment.typographicBounds.origin.y + offset
+                ),
+                in: context
+            )
+        }
+
+        context.restoreGState()
+    }
+}
+
+final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayoutManagerDelegate {
     var fencedCodeTracker: FencedCodeTracker?
     var isFocusModeEnabled = false
     var focusedParagraphLocation: Int?
@@ -166,6 +224,18 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate {
         }
 
         return NSTextParagraph(attributedString: styled)
+    }
+
+    func textLayoutManager(
+        _ textLayoutManager: NSTextLayoutManager,
+        textLayoutFragmentFor location: any NSTextLocation,
+        in textElement: NSTextElement
+    ) -> NSTextLayoutFragment {
+        EditorTextLayoutFragment(
+            textElement: textElement,
+            range: textElement.elementRange,
+            defaultParagraphStyle: EditorTypography.paragraphStyle(for: .plain, preferences: prefs)
+        )
     }
 
     // MARK: - Block-level styling
