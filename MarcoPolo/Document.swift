@@ -124,7 +124,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
         editor.isHorizontallyResizable = false
         editor.autoresizingMask = [.width]
         editor.backgroundColor = .textBackgroundColor
-        editor.insertionPointColor = .systemBlue
+        editor.setCaretColor(.systemBlue)
         editor.textColor = .textColor
         editor.font = prefs.font
         editor.textContainerInset = NSSize(width: 80, height: max(140, contentSize.height * 0.35)) // width updated in updateTextInsets
@@ -512,7 +512,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
         markdownStyling.updateThemeIfNeeded()
         textView.font = prefs.font
         textView.backgroundColor = palette.editorBackground
-        textView.insertionPointColor = palette.caret
+        textView.setCaretColor(palette.caret)
         textView.textColor = palette.editorText
         textView.applyTheme(palette)
         scrollView?.backgroundColor = palette.editorBackground

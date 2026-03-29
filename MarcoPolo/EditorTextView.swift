@@ -1,4 +1,106 @@
 import AppKit
+import QuartzCore
+
+private final class EditorCaretOverlayView: NSView {
+    var caretRect: NSRect = .zero {
+        didSet {
+            if oldValue != .zero {
+                needsDisplay = true
+            }
+            if caretRect != .zero {
+                needsDisplay = true
+            }
+        }
+    }
+
+    var caretColor: NSColor = .systemBlue {
+        didSet {
+            if caretColor != oldValue {
+                needsDisplay = true
+            }
+        }
+    }
+
+    var caretAlpha: CGFloat = 0.78 {
+        didSet {
+            if caretAlpha != oldValue {
+                needsDisplay = true
+            }
+        }
+    }
+
+    var isCaretVisible = false {
+        didSet {
+            if isCaretVisible != oldValue {
+                needsDisplay = true
+            }
+        }
+    }
+
+    override var isOpaque: Bool { false }
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        commonInit()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        commonInit()
+    }
+
+    private func commonInit() {
+        wantsLayer = true
+        layerContentsRedrawPolicy = .onSetNeedsDisplay
+        alphaValue = 0
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard isCaretVisible,
+              caretRect.width > 0,
+              caretRect.height > 0,
+              caretRect.intersects(dirtyRect) else {
+            return
+        }
+
+        caretColor.withAlphaComponent(caretAlpha).setFill()
+        NSBezierPath(
+            roundedRect: caretRect,
+            xRadius: caretRect.width / 2.0,
+            yRadius: caretRect.width / 2.0
+        ).fill()
+    }
+
+    func showImmediately() {
+        layer?.removeAllAnimations()
+        isCaretVisible = true
+        alphaValue = 1
+    }
+
+    func hideImmediately() {
+        layer?.removeAllAnimations()
+        isCaretVisible = false
+        alphaValue = 0
+    }
+
+    func fadeOut(duration: TimeInterval) {
+        guard isCaretVisible else { return }
+
+        layer?.removeAllAnimations()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            self?.isCaretVisible = false
+            self?.alphaValue = 0
+        }
+    }
+}
 
 final class EditorTextView: NSTextView {
 
@@ -6,26 +108,53 @@ final class EditorTextView: NSTextView {
     private var selectionFillColor = NSColor.selectedContentBackgroundColor.withAlphaComponent(0.26)
     private let geometryLoggingEnabled = true
     private var lastLoggedCursorRect: NSRect = .zero
+    private let caretOverlayView = EditorCaretOverlayView(frame: .zero)
+    private weak var caretHostView: NSClipView?
+    private var caretHostBoundsObserver: NSObjectProtocol?
+    private weak var observedWindow: NSWindow?
+    private var windowKeyObservers: [NSObjectProtocol] = []
+    private var caretBlinkTimer: Timer?
+    private var isCaretBlinkOn = true
+    private var caretColor = NSColor.systemBlue
 
     // MARK: - Insertion point
 
-    private let cursorWidth: CGFloat = 4
-    private var lastCursorRect: NSRect = .zero
+    private let cursorWidth: CGFloat = 3
+    private let cursorHeightScale: CGFloat = 1.4
+    private let cursorAlpha: CGFloat = 0.78
+    private let cursorBlinkInterval: TimeInterval = 0.68
+    private let cursorFadeDuration: TimeInterval = 0.20
+
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
+        super.init(frame: frameRect, textContainer: container)
+        commonInit()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        commonInit()
+    }
+
+    deinit {
+        tearDownCaretInfrastructure()
+    }
+
+    private func commonInit() {
+        caretOverlayView.caretColor = caretColor
+        caretOverlayView.caretAlpha = cursorAlpha
+        super.insertionPointColor = .clear
+    }
+
+    func setCaretColor(_ color: NSColor) {
+        caretColor = color
+        caretOverlayView.caretColor = color
+        super.insertionPointColor = .clear
+        updateCaretOverlay(resetBlink: false)
+    }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-        let cursorRect = resolvedInsertionPointRect(from: rect)
-        debugLogInsertionGeometryIfNeeded(sourceRect: rect, resolvedRect: cursorRect)
-
-        if lastCursorRect != .zero {
-            setNeedsDisplay(lastCursorRect, avoidAdditionalLayout: true)
-        }
-
-        if flag {
-            color.setFill()
-            NSBezierPath(roundedRect: cursorRect, xRadius: cursorWidth / 2, yRadius: cursorWidth / 2).fill()
-        }
-
-        lastCursorRect = cursorRect
+        // Intentionally empty. Marco Polo renders its own caret overlay so that
+        // caret size and placement stay independent from AppKit's insertion point.
     }
 
     override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
@@ -41,6 +170,43 @@ final class EditorTextView: NSTextView {
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if observedWindow !== window {
+            removeWindowKeyObservers()
+            observedWindow = window
+        }
+        installCaretInfrastructureIfNeeded()
+        updateCaretOverlay(resetBlink: true)
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        installCaretInfrastructureIfNeeded()
+        updateCaretOverlay(resetBlink: false)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        updateCaretOverlay(resetBlink: false)
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let didBecome = super.becomeFirstResponder()
+        if didBecome {
+            updateCaretOverlay(resetBlink: true)
+        }
+        return didBecome
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let didResign = super.resignFirstResponder()
+        if didResign {
+            updateCaretOverlay(resetBlink: false)
+        }
+        return didResign
     }
 
     override func drawBackground(in rect: NSRect) {
@@ -373,6 +539,7 @@ final class EditorTextView: NSTextView {
     override func didChangeText() {
         super.didChangeText()
         syncTypingAttributes()
+        updateCaretOverlay(resetBlink: true)
         if Preferences.shared.isTypewriterScrollEnabled {
             centerSelectionIfNeeded(animated: false)
         }
@@ -383,6 +550,8 @@ final class EditorTextView: NSTextView {
         syncTypingAttributes()
         needsDisplay = true
         debugLogSelectionGeometryIfNeeded()
+        debugLogCaretSnapshotIfNeeded()
+        updateCaretOverlay(resetBlink: true)
         if Preferences.shared.isTypewriterScrollEnabled {
             centerSelectionIfNeeded(animated: false)
         }
@@ -442,27 +611,20 @@ final class EditorTextView: NSTextView {
         return MarkdownPatterns.paragraphType(for: lineText, isInFencedCode: isInFencedCode)
     }
 
-    private func resolvedInsertionPointRect(from rect: NSRect) -> NSRect {
-        let baseRect: NSRect
-        if let tlm = textLayoutManager {
-            let selection = selectedRange()
-            baseRect = insertionPointRect(for: selection, using: tlm)
-                ?? insertionPointFallbackRect(for: selection, using: tlm)
-                ?? rect
-        } else {
-            baseRect = rect
-        }
-
-        let rawHeight = baseRect.height > 0 ? baseRect.height : EditorTypography.fallbackCaretHeight(for: Preferences.shared.font)
-        let drawHeight = max(2, floor(rawHeight))
-        let drawY = baseRect.origin.y + ((rawHeight - drawHeight) / 2.0)
+    private func resolvedInsertionPointRect(from rect: NSRect, fallbackRect baseRect: NSRect? = nil) -> NSRect {
+        let sourceRect = baseRect ?? rect
+        let caretFont = fontForCaret(at: selectedRange().location)
+        let rawHeight = sourceRect.height > 0 ? sourceRect.height : EditorTypography.fallbackCaretHeight(for: caretFont)
+        let targetHeight = max(2, round(caretFont.pointSize * cursorHeightScale))
+        let drawHeight = min(rawHeight, targetHeight)
+        let drawY = sourceRect.origin.y + ((rawHeight - drawHeight) / 2.0)
 
         return NSRect(
-            x: baseRect.origin.x,
+            x: sourceRect.origin.x,
             y: drawY,
             width: cursorWidth,
             height: drawHeight
-        ).integral
+        ).standardized
     }
 
     private func selectionRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
@@ -490,6 +652,24 @@ final class EditorTextView: NSTextView {
         }
 
         return result
+    }
+
+    private func debugLogCaretSnapshotIfNeeded() {
+        guard geometryLoggingEnabled,
+              let tlm = textLayoutManager,
+              let selectedRange = selectedRanges.first?.rangeValue,
+              selectedRange.length == 0 else {
+            return
+        }
+
+        let sourceRect = insertionPointRect(for: selectedRange, using: tlm)
+            ?? insertionPointFallbackRect(for: selectedRange, using: tlm)
+            ?? .zero
+        guard sourceRect != .zero else { return }
+
+        let resolvedRect = resolvedInsertionPointDisplayRect(for: selectedRange, using: tlm)
+            ?? displayRect(forTextContainerRect: resolvedInsertionPointRect(from: sourceRect, fallbackRect: sourceRect))
+        debugLogInsertionGeometryIfNeeded(sourceRect: sourceRect, resolvedRect: resolvedRect)
     }
 
     private func insertionPointRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
@@ -527,6 +707,14 @@ final class EditorTextView: NSTextView {
         return nil
     }
 
+    private func resolvedInsertionPointDisplayRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
+        let baseRect = insertionPointRect(for: nsRange, using: tlm)
+            ?? insertionPointFallbackRect(for: nsRange, using: tlm)
+        guard let baseRect else { return nil }
+        let resolved = resolvedInsertionPointRect(from: baseRect, fallbackRect: baseRect)
+        return displayRect(forTextContainerRect: resolved)
+    }
+
     private func intersection(_ lhs: NSRange, _ rhs: NSRange) -> NSRange? {
         let start = max(lhs.location, rhs.location)
         let end = min(NSMaxRange(lhs), NSMaxRange(rhs))
@@ -548,13 +736,21 @@ final class EditorTextView: NSTextView {
         }
     }
 
+    private func displayRect(forTextContainerRect rect: NSRect) -> NSRect {
+        var displayRect = rect
+        let origin = textContainerOrigin
+        displayRect.origin.x += origin.x
+        displayRect.origin.y += origin.y
+        return displayRect.standardized
+    }
+
     private func caretRect(for segmentFrame: NSRect) -> NSRect {
         return NSRect(
             x: segmentFrame.minX,
             y: segmentFrame.minY,
             width: cursorWidth,
             height: max(2, segmentFrame.height)
-        ).integral
+        ).standardized
     }
 
     private func fontForCaret(at location: Int) -> NSFont {
@@ -641,14 +837,20 @@ final class EditorTextView: NSTextView {
               resolvedRect != lastLoggedCursorRect,
               let tlm = textLayoutManager,
               let selectedRange = selectedRanges.first?.rangeValue,
-              selectedRange.length == 0,
-              let insertionRect = insertionPointRect(for: selectedRange, using: tlm) else {
+              selectedRange.length == 0 else {
             return
         }
+
+        let insertionRect = insertionPointRect(for: selectedRange, using: tlm)
+        let fallbackRect = insertionPointFallbackRect(for: selectedRange, using: tlm)
+        guard insertionRect != nil || fallbackRect != nil || sourceRect != .zero else { return }
 
         let font = fontForCaret(at: selectedRange.location)
         let paragraphStyle = paragraphStyleAtCharacterOffset(selectedRange.location)
         let fragmentDebug = lineFragmentDebugDescription(at: selectedRange.location)
+        let rawHeight = (insertionRect ?? fallbackRect ?? sourceRect).height
+        let targetHeight = max(2, round(font.pointSize * cursorHeightScale))
+        let drawHeight = resolvedRect.height
 
         NSLog("""
         [Geometry][Caret]
@@ -656,13 +858,180 @@ final class EditorTextView: NSTextView {
           font=\(font.fontName) size=\(String(format: "%.2f", font.pointSize))
           asc=\(String(format: "%.2f", font.ascender)) desc=\(String(format: "%.2f", font.descender)) leading=\(String(format: "%.2f", font.leading))
           fixedLineHeight=\(String(format: "%.2f", EditorTypography.fixedLineHeight(for: font))) lineHeightMultiple=\(String(format: "%.2f", EditorTypography.normalizedLineHeightMultiple(for: paragraphStyle)))
+          cursorWidth=\(String(format: "%.2f", cursorWidth)) cursorHeightScale=\(String(format: "%.2f", cursorHeightScale))
+          rawCaretHeight=\(String(format: "%.2f", rawHeight)) targetCaretHeight=\(String(format: "%.2f", targetHeight)) drawCaretHeight=\(String(format: "%.2f", drawHeight))
           sourceRect=\(NSStringFromRect(sourceRect))
-          insertionRect=\(NSStringFromRect(insertionRect))
+          insertionRect=\(insertionRect.map(NSStringFromRect) ?? "nil")
+          fallbackRect=\(fallbackRect.map(NSStringFromRect) ?? "nil")
           resolvedCursorRect=\(NSStringFromRect(resolvedRect))
           \(fragmentDebug)
         """)
 
         lastLoggedCursorRect = resolvedRect
+    }
+
+    // MARK: - Custom caret overlay
+
+    private var shouldShowCustomCaret: Bool {
+        guard selectedRange().length == 0,
+              isEditable,
+              window?.isKeyWindow == true,
+              window?.firstResponder === self else {
+            return false
+        }
+        return true
+    }
+
+    private func installCaretInfrastructureIfNeeded() {
+        installCaretOverlayIfNeeded()
+        installWindowKeyObservers()
+    }
+
+    private func installCaretOverlayIfNeeded() {
+        guard let clipView = enclosingScrollView?.contentView else { return }
+
+        if caretHostView !== clipView {
+            removeCaretHostObserver()
+            caretHostView = clipView
+            clipView.postsBoundsChangedNotifications = true
+            caretHostBoundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: clipView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.caretOverlayView.frame = clipView.bounds
+                self?.updateCaretOverlay(resetBlink: false)
+            }
+        }
+
+        if caretOverlayView.superview !== clipView {
+            caretOverlayView.removeFromSuperview()
+            caretOverlayView.frame = clipView.bounds
+            caretOverlayView.autoresizingMask = [.width, .height]
+            clipView.addSubview(caretOverlayView, positioned: .above, relativeTo: self)
+        }
+    }
+
+    private func installWindowKeyObservers() {
+        guard windowKeyObservers.isEmpty, let window else { return }
+
+        let notificationCenter = NotificationCenter.default
+        let names: [Notification.Name] = [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didResignKeyNotification
+        ]
+
+        windowKeyObservers = names.map { name in
+            notificationCenter.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                self?.updateCaretOverlay(resetBlink: false)
+            }
+        }
+    }
+
+    private func tearDownCaretInfrastructure() {
+        removeCaretHostObserver()
+        removeWindowKeyObservers()
+        stopCaretBlinkTimer()
+        caretOverlayView.removeFromSuperview()
+    }
+
+    private func removeWindowKeyObservers() {
+        if !windowKeyObservers.isEmpty {
+            let notificationCenter = NotificationCenter.default
+            windowKeyObservers.forEach(notificationCenter.removeObserver)
+            windowKeyObservers.removeAll()
+        }
+        observedWindow = nil
+    }
+
+    private func removeCaretHostObserver() {
+        if let caretHostBoundsObserver {
+            NotificationCenter.default.removeObserver(caretHostBoundsObserver)
+            self.caretHostBoundsObserver = nil
+        }
+        caretHostView = nil
+    }
+
+    private func updateCaretOverlay(resetBlink: Bool) {
+        installCaretInfrastructureIfNeeded()
+        guard let tlm = textLayoutManager,
+              let clipView = caretOverlayView.superview else {
+            caretOverlayView.hideImmediately()
+            caretOverlayView.caretRect = .zero
+            stopCaretBlinkTimer()
+            return
+        }
+
+        caretOverlayView.caretColor = caretColor
+        caretOverlayView.frame = clipView.bounds
+
+        guard shouldShowCustomCaret,
+              let selectedRange = selectedRanges.first?.rangeValue,
+              let displayRect = resolvedInsertionPointDisplayRect(for: selectedRange, using: tlm) else {
+            caretOverlayView.hideImmediately()
+            caretOverlayView.caretRect = .zero
+            stopCaretBlinkTimer()
+            return
+        }
+
+        let overlayRect = convert(displayRect, to: caretOverlayView).standardized
+        caretOverlayView.caretRect = overlayRect
+
+        if resetBlink {
+            restartCaretBlink()
+        } else {
+            updateCaretBlinkTimerIfNeeded()
+            if isCaretBlinkOn {
+                caretOverlayView.showImmediately()
+            } else if !caretOverlayView.isCaretVisible {
+                caretOverlayView.hideImmediately()
+            }
+        }
+    }
+
+    private func restartCaretBlink() {
+        isCaretBlinkOn = true
+        caretOverlayView.showImmediately()
+        updateCaretBlinkTimerIfNeeded(restart: true)
+    }
+
+    private func updateCaretBlinkTimerIfNeeded(restart: Bool = false) {
+        guard shouldShowCustomCaret else {
+            stopCaretBlinkTimer()
+            return
+        }
+
+        if restart {
+            stopCaretBlinkTimer()
+        }
+
+        guard caretBlinkTimer == nil else { return }
+
+        let timer = Timer(timeInterval: cursorBlinkInterval, repeats: true) { [weak self] _ in
+            self?.toggleCaretBlink()
+        }
+        caretBlinkTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func stopCaretBlinkTimer() {
+        caretBlinkTimer?.invalidate()
+        caretBlinkTimer = nil
+        isCaretBlinkOn = true
+    }
+
+    private func toggleCaretBlink() {
+        guard shouldShowCustomCaret else {
+            updateCaretOverlay(resetBlink: false)
+            return
+        }
+
+        isCaretBlinkOn.toggle()
+        if isCaretBlinkOn {
+            caretOverlayView.showImmediately()
+        } else {
+            caretOverlayView.fadeOut(duration: cursorFadeDuration)
+        }
     }
 
     private func lineFragmentDebugDescription(at location: Int) -> String {
