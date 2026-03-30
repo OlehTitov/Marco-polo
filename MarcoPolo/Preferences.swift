@@ -15,6 +15,7 @@ final class Preferences {
         static let fontFamily = "fontFamily"
         static let fontSize = "fontSize"
         static let theme = "theme"
+        static let caretColor = "caretColor"
         static let contentWidth = "contentWidth"
         static let typewriterScroll = "typewriterScroll"
     }
@@ -48,6 +49,20 @@ final class Preferences {
         }
         set {
             UserDefaults.standard.set(newValue.rawValue, forKey: Keys.theme)
+            postChange()
+        }
+    }
+
+    var caretColorOption: EditorCaretColorOption {
+        get {
+            guard let rawValue = UserDefaults.standard.string(forKey: Keys.caretColor),
+                  let option = EditorCaretColorOption(rawValue: rawValue) else {
+                return .theme
+            }
+            return option
+        }
+        set {
+            UserDefaults.standard.set(newValue.rawValue, forKey: Keys.caretColor)
             postChange()
         }
     }
@@ -106,6 +121,12 @@ final class Preferences {
     func themePalette(for appearance: NSAppearance? = nil) -> EditorThemePalette {
         let resolvedAppearance = appearance ?? NSApp.effectiveAppearance
         return theme.palette(for: resolvedAppearance)
+    }
+
+    func caretColor(for appearance: NSAppearance? = nil) -> NSColor {
+        let resolvedAppearance = appearance ?? NSApp.effectiveAppearance
+        let palette = themePalette(for: resolvedAppearance)
+        return caretColorOption.resolvedColor(themePalette: palette, appearance: resolvedAppearance)
     }
 
     private func postChange() {

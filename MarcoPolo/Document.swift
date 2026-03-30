@@ -182,6 +182,9 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
         customizationVC.onThemeChange = { theme in
             Preferences.shared.theme = theme
         }
+        customizationVC.onCaretColorChange = { option in
+            Preferences.shared.caretColorOption = option
+        }
         customizationVC.onFontFamilyChange = { family in
             Preferences.shared.fontFamily = family
         }
@@ -513,7 +516,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
         markdownStyling.updateThemeIfNeeded()
         textView.font = prefs.font
         textView.backgroundColor = palette.editorBackground
-        textView.setCaretColor(palette.caret)
+        textView.setCaretColor(prefs.caretColor(for: appearance))
         textView.textColor = palette.editorText
         textView.applyTheme(palette)
         scrollView?.backgroundColor = palette.editorBackground

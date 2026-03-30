@@ -2,12 +2,14 @@ import AppKit
 
 final class EditorCustomizationViewController: NSViewController {
     var onThemeChange: ((EditorTheme) -> Void)?
+    var onCaretColorChange: ((EditorCaretColorOption) -> Void)?
     var onFontFamilyChange: ((String) -> Void)?
     var onFontSizeChange: ((CGFloat) -> Void)?
     var onContentWidthChange: ((EditorContentWidth) -> Void)?
 
     private let titleLabel = NSTextField(labelWithString: "View")
     private let themeLabel = NSTextField(labelWithString: "Theme")
+    private let caretLabel = NSTextField(labelWithString: "Caret")
     private let fontLabel = NSTextField(labelWithString: "Typeface")
     private let sizeLabel = NSTextField(labelWithString: "Size")
     private let widthLabel = NSTextField(labelWithString: "Width")
@@ -21,7 +23,9 @@ final class EditorCustomizationViewController: NSViewController {
         action: nil
     )
     private let themeStack = NSStackView()
+    private let caretStack = NSStackView()
     private var themeButtons: [EditorTheme: ThemeSwatchButton] = [:]
+    private var caretButtons: [EditorCaretColorOption: CaretColorSwatchButton] = [:]
     private var sectionLabels: [NSTextField] = []
     private let rootStack = NSStackView()
 
@@ -31,7 +35,7 @@ final class EditorCustomizationViewController: NSViewController {
         effectView.blendingMode = .behindWindow
         effectView.state = .active
         self.view = effectView
-        preferredContentSize = NSSize(width: 288, height: 252)
+        preferredContentSize = NSSize(width: 288, height: 318)
 
         configureControls()
         buildLayout()
@@ -54,6 +58,15 @@ final class EditorCustomizationViewController: NSViewController {
         for (theme, button) in themeButtons {
             button.isSelectedTheme = theme == preferences.theme
         }
+
+        let appearance = preferences.theme.preferredAppearanceName.flatMap(NSAppearance.init(named:))
+            ?? view.appearance
+            ?? NSApp.effectiveAppearance
+        let palette = preferences.theme.palette(for: appearance)
+        updateCaretButtonsPreview(palette: palette, appearanceName: preferences.theme.preferredAppearanceName)
+        for (option, button) in caretButtons {
+            button.isSelectedColor = option == preferences.caretColorOption
+        }
     }
 
     func applyTheme(_ palette: EditorThemePalette, appearanceName: NSAppearance.Name?) {
@@ -64,12 +77,14 @@ final class EditorCustomizationViewController: NSViewController {
         for label in sectionLabels {
             label.textColor = palette.popoverSecondaryText
         }
+
+        updateCaretButtonsPreview(palette: palette, appearanceName: appearanceName)
     }
 
     private func configureControls() {
         titleLabel.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
 
-        sectionLabels = [themeLabel, fontLabel, sizeLabel, widthLabel]
+        sectionLabels = [themeLabel, caretLabel, fontLabel, sizeLabel, widthLabel]
         for label in sectionLabels {
             label.font = NSFont.systemFont(ofSize: 11, weight: .medium)
         }
@@ -84,6 +99,18 @@ final class EditorCustomizationViewController: NSViewController {
             button.action = #selector(themeButtonPressed(_:))
             themeButtons[theme] = button
             themeStack.addArrangedSubview(button)
+        }
+
+        caretStack.orientation = .horizontal
+        caretStack.alignment = .centerY
+        caretStack.spacing = 8
+
+        for option in EditorCaretColorOption.allCases {
+            let button = CaretColorSwatchButton(option: option)
+            button.target = self
+            button.action = #selector(caretButtonPressed(_:))
+            caretButtons[option] = button
+            caretStack.addArrangedSubview(button)
         }
 
         fontPopup.font = NSFont.systemFont(ofSize: 13)
@@ -124,6 +151,7 @@ final class EditorCustomizationViewController: NSViewController {
 
         rootStack.addArrangedSubview(titleLabel)
         rootStack.addArrangedSubview(makeSection(label: themeLabel, body: themeStack))
+        rootStack.addArrangedSubview(makeSection(label: caretLabel, body: caretStack))
         rootStack.addArrangedSubview(makeSection(label: fontLabel, body: fontPopup))
         rootStack.addArrangedSubview(makeSection(label: sizeLabel, body: sizeStack))
         rootStack.addArrangedSubview(makeSection(label: widthLabel, body: contentWidthControl))
@@ -154,6 +182,10 @@ final class EditorCustomizationViewController: NSViewController {
         onThemeChange?(sender.theme)
     }
 
+    @objc private func caretButtonPressed(_ sender: CaretColorSwatchButton) {
+        onCaretColorChange?(sender.option)
+    }
+
     @objc private func fontPopupChanged(_ sender: NSPopUpButton) {
         guard let title = sender.selectedItem?.title else { return }
         onFontFamilyChange?(title)
@@ -169,6 +201,14 @@ final class EditorCustomizationViewController: NSViewController {
         guard sender.selectedSegment >= 0,
               sender.selectedSegment < EditorContentWidth.allCases.count else { return }
         onContentWidthChange?(EditorContentWidth.allCases[sender.selectedSegment])
+    }
+
+    private func updateCaretButtonsPreview(palette: EditorThemePalette, appearanceName: NSAppearance.Name?) {
+        let appearance = appearanceName.flatMap(NSAppearance.init(named:)) ?? view.appearance ?? NSApp.effectiveAppearance
+        for button in caretButtons.values {
+            button.previewAppearance = appearance
+            button.themeCaretColor = palette.caret
+        }
     }
 }
 
@@ -265,6 +305,105 @@ final class ThemeSwatchButton: NSButton {
             innerStroke.lineWidth = 1
             innerStroke.stroke()
         }
+    }
+}
+
+final class CaretColorSwatchButton: NSButton {
+    let option: EditorCaretColorOption
+    var isSelectedColor = false {
+        didSet { needsDisplay = true }
+    }
+
+    var themeCaretColor: NSColor = .systemBlue {
+        didSet { needsDisplay = true }
+    }
+
+    var previewAppearance: NSAppearance = NSApp.effectiveAppearance {
+        didSet { needsDisplay = true }
+    }
+
+    init(option: EditorCaretColorOption) {
+        self.option = option
+        super.init(frame: NSRect(x: 0, y: 0, width: 28, height: 28))
+        isBordered = false
+        title = ""
+        setButtonType(.momentaryChange)
+        focusRingType = .none
+        toolTip = option.displayName
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var intrinsicContentSize: NSSize {
+        NSSize(width: 28, height: 28)
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let ringRect = bounds.insetBy(dx: 2, dy: 2)
+        let fillRect = ringRect.insetBy(dx: isSelectedColor ? 4 : 3, dy: isSelectedColor ? 4 : 3)
+        let palette = EditorTheme.dark.palette(for: previewAppearance)
+        let swatchColor = option.resolvedColor(
+            themePalette: paletteWithThemeCaret(from: palette),
+            appearance: previewAppearance
+        )
+        let ringColor = isSelectedColor
+            ? swatchColor
+            : NSColor.separatorColor.withAlphaComponent(0.24)
+
+        ringColor.setStroke()
+        let ringPath = NSBezierPath(ovalIn: ringRect)
+        ringPath.lineWidth = isSelectedColor ? 2.25 : 1
+        ringPath.stroke()
+
+        swatchColor.setFill()
+        NSBezierPath(ovalIn: fillRect).fill()
+
+        if option == .theme {
+            let attributes: [NSAttributedString.Key: Any] = [
+                .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                .foregroundColor: NSColor.white.withAlphaComponent(0.92)
+            ]
+            let string = NSAttributedString(string: "T", attributes: attributes)
+            let size = string.size()
+            let textRect = NSRect(
+                x: fillRect.midX - (size.width / 2),
+                y: fillRect.midY - (size.height / 2) - 0.5,
+                width: size.width,
+                height: size.height
+            )
+            string.draw(in: textRect)
+        }
+    }
+
+    private func paletteWithThemeCaret(from palette: EditorThemePalette) -> EditorThemePalette {
+        EditorThemePalette(
+            editorBackground: palette.editorBackground,
+            editorText: palette.editorText,
+            selectionFill: palette.selectionFill,
+            secondaryText: palette.secondaryText,
+            tertiaryText: palette.tertiaryText,
+            subduedText: palette.subduedText,
+            linkText: palette.linkText,
+            caret: themeCaretColor,
+            sidebarBackground: palette.sidebarBackground,
+            sidebarText: palette.sidebarText,
+            sidebarBorder: palette.sidebarBorder,
+            statusBarBackground: palette.statusBarBackground,
+            statusBarText: palette.statusBarText,
+            separator: palette.separator,
+            codeBlockFill: palette.codeBlockFill,
+            inlineCodeFill: palette.inlineCodeFill,
+            inlineCodeText: palette.inlineCodeText,
+            fadeOverlayColor: palette.fadeOverlayColor,
+            fadeOverlayOpacity: palette.fadeOverlayOpacity,
+            monogramText: palette.monogramText,
+            monogramHoverFill: palette.monogramHoverFill,
+            monogramActiveFill: palette.monogramActiveFill,
+            popoverLabelText: palette.popoverLabelText,
+            popoverSecondaryText: palette.popoverSecondaryText,
+            codeThemeName: palette.codeThemeName
+        )
     }
 }
 

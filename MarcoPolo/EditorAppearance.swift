@@ -43,6 +43,46 @@ enum EditorContentWidth: String, CaseIterable {
     }
 }
 
+enum EditorCaretColorOption: String, CaseIterable {
+    case theme
+    case orange
+    case purple
+    case turquoise
+    case green
+    case pink
+
+    var displayName: String {
+        switch self {
+        case .theme: return "Theme"
+        case .orange: return "Orange"
+        case .purple: return "Purple"
+        case .turquoise: return "Turquoise"
+        case .green: return "Green"
+        case .pink: return "Pink"
+        }
+    }
+
+    func resolvedColor(themePalette: EditorThemePalette, appearance: NSAppearance) -> NSColor {
+        let color: NSColor
+        switch self {
+        case .theme:
+            color = themePalette.caret
+        case .orange:
+            color = .systemOrange
+        case .purple:
+            color = .systemPurple
+        case .turquoise:
+            color = .systemTeal
+        case .green:
+            color = .systemGreen
+        case .pink:
+            color = .systemPink
+        }
+
+        return resolvedPreviewColor(color, for: appearance)
+    }
+}
+
 struct EditorThemePalette {
     let editorBackground: NSColor
     let editorText: NSColor
