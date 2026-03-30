@@ -109,13 +109,22 @@ final class EditorTextView: NSTextView {
     private let geometryLoggingEnabled = true
     private var lastLoggedCursorRect: NSRect = .zero
     private let caretOverlayView = EditorCaretOverlayView(frame: .zero)
-    private weak var caretHostView: NSClipView?
-    private var caretHostBoundsObserver: NSObjectProtocol?
     private weak var observedWindow: NSWindow?
     private var windowKeyObservers: [NSObjectProtocol] = []
     private var caretBlinkTimer: Timer?
     private var isCaretBlinkOn = true
     private var caretColor = NSColor.systemBlue
+    private var capturedAppKitInsertionPointRect: NSRect?
+    private var capturedAppKitInsertionPointLocation: Int?
+    private var isCaretOverlayUpdateScheduledFromAppKitRect = false
+    private var pointerGestureSequence = 0
+    private var activePointerGestureSequence: Int?
+    private var activePointerGestureStartedNearCaret = false
+    private var caretDragStartPoint: NSPoint?
+    private var caretDragAnchorRange: NSRange?
+    private var caretDragAnchorSelections: [NSTextSelection] = []
+    private var caretDragAnchorLocation: NSTextLocation?
+    private var isHandlingCustomCaretSelectionDrag = false
 
     // MARK: - Insertion point
 
@@ -124,6 +133,8 @@ final class EditorTextView: NSTextView {
     private let cursorAlpha: CGFloat = 0.78
     private let cursorBlinkInterval: TimeInterval = 0.68
     private let cursorFadeDuration: TimeInterval = 0.20
+    private let caretPointerHitSlop: CGFloat = 6
+    private let caretDragActivationDistance: CGFloat = 2
 
     override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) {
         super.init(frame: frameRect, textContainer: container)
@@ -153,8 +164,9 @@ final class EditorTextView: NSTextView {
     }
 
     override func drawInsertionPoint(in rect: NSRect, color: NSColor, turnedOn flag: Bool) {
-        // Intentionally empty. Marco Polo renders its own caret overlay so that
-        // caret size and placement stay independent from AppKit's insertion point.
+        captureAppKitInsertionPointRect(rect)
+        // Intentionally avoid calling super. Marco Polo renders its own caret
+        // overlay, but it now anchors that overlay to AppKit's insertion rect.
     }
 
     override func setNeedsDisplay(_ rect: NSRect, avoidAdditionalLayout flag: Bool) {
@@ -178,19 +190,64 @@ final class EditorTextView: NSTextView {
             removeWindowKeyObservers()
             observedWindow = window
         }
+        invalidateCapturedAppKitInsertionPointRect()
         installCaretInfrastructureIfNeeded()
         updateCaretOverlay(resetBlink: true)
     }
 
     override func viewDidMoveToSuperview() {
         super.viewDidMoveToSuperview()
+        invalidateCapturedAppKitInsertionPointRect()
         installCaretInfrastructureIfNeeded()
         updateCaretOverlay(resetBlink: false)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        invalidateCapturedAppKitInsertionPointRect()
         updateCaretOverlay(resetBlink: false)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        pointerGestureSequence += 1
+        activePointerGestureSequence = pointerGestureSequence
+        activePointerGestureStartedNearCaret = shouldTrackPointerGesture(at: localPoint)
+        prepareCaretDragStateIfNeeded(at: localPoint)
+        debugLogPointerEventIfNeeded("mouseDown.before", event: event, localPoint: localPoint)
+        super.mouseDown(with: event)
+        debugLogPointerEventIfNeeded("mouseDown.after", event: event, localPoint: localPoint)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        debugLogPointerEventIfNeeded("mouseDragged.before", event: event, localPoint: localPoint)
+
+        if handleCustomCaretSelectionDragIfNeeded(at: localPoint) {
+            debugLogPointerEventIfNeeded("mouseDragged.custom", event: event, localPoint: localPoint)
+            return
+        }
+
+        super.mouseDragged(with: event)
+
+        _ = handleCustomCaretSelectionDragIfNeeded(at: localPoint)
+        debugLogPointerEventIfNeeded("mouseDragged.after", event: event, localPoint: localPoint)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        debugLogPointerEventIfNeeded("mouseUp.before", event: event, localPoint: localPoint)
+
+        if isHandlingCustomCaretSelectionDrag {
+            debugLogCustomCaretDragIfNeeded("mouseUp.custom", localPoint: localPoint, selections: nil)
+        } else {
+            super.mouseUp(with: event)
+        }
+
+        debugLogPointerEventIfNeeded("mouseUp.after", event: event, localPoint: localPoint)
+        resetCaretDragState()
+        activePointerGestureSequence = nil
+        activePointerGestureStartedNearCaret = false
     }
 
     override func becomeFirstResponder() -> Bool {
@@ -538,6 +595,7 @@ final class EditorTextView: NSTextView {
 
     override func didChangeText() {
         super.didChangeText()
+        invalidateCapturedAppKitInsertionPointRect()
         syncTypingAttributes()
         updateCaretOverlay(resetBlink: true)
         if Preferences.shared.isTypewriterScrollEnabled {
@@ -547,8 +605,14 @@ final class EditorTextView: NSTextView {
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting flag: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: flag)
+        invalidateCapturedAppKitInsertionPointRectIfNeeded(for: ranges)
         syncTypingAttributes()
         needsDisplay = true
+        debugLogSelectionChangeDuringPointerGestureIfNeeded(
+            ranges: ranges,
+            affinity: affinity,
+            stillSelecting: flag
+        )
         debugLogSelectionGeometryIfNeeded()
         debugLogCaretSnapshotIfNeeded()
         updateCaretOverlay(resetBlink: true)
@@ -611,16 +675,22 @@ final class EditorTextView: NSTextView {
         return MarkdownPatterns.paragraphType(for: lineText, isInFencedCode: isInFencedCode)
     }
 
-    private func resolvedInsertionPointRect(from rect: NSRect, fallbackRect baseRect: NSRect? = nil) -> NSRect {
+    private func resolvedInsertionPointRect(
+        from rect: NSRect,
+        fallbackRect baseRect: NSRect? = nil,
+        alignToSourceMidX: Bool = false
+    ) -> NSRect {
         let sourceRect = baseRect ?? rect
         let caretFont = fontForCaret(at: selectedRange().location)
         let rawHeight = sourceRect.height > 0 ? sourceRect.height : EditorTypography.fallbackCaretHeight(for: caretFont)
         let targetHeight = max(2, round(caretFont.pointSize * cursorHeightScale))
         let drawHeight = min(rawHeight, targetHeight)
         let drawY = sourceRect.origin.y + ((rawHeight - drawHeight) / 2.0)
+        let anchorX = alignToSourceMidX ? sourceRect.midX : sourceRect.minX
+        let drawX = anchorX - (cursorWidth / 2.0)
 
         return NSRect(
-            x: sourceRect.origin.x,
+            x: drawX,
             y: drawY,
             width: cursorWidth,
             height: drawHeight
@@ -662,13 +732,16 @@ final class EditorTextView: NSTextView {
             return
         }
 
-        let sourceRect = insertionPointRect(for: selectedRange, using: tlm)
-            ?? insertionPointFallbackRect(for: selectedRange, using: tlm)
+        let sourceRect = rawInsertionPointDisplayRect(for: selectedRange, using: tlm)
             ?? .zero
         guard sourceRect != .zero else { return }
 
         let resolvedRect = resolvedInsertionPointDisplayRect(for: selectedRange, using: tlm)
-            ?? displayRect(forTextContainerRect: resolvedInsertionPointRect(from: sourceRect, fallbackRect: sourceRect))
+            ?? resolvedInsertionPointRect(
+                from: sourceRect,
+                fallbackRect: sourceRect,
+                alignToSourceMidX: appKitInsertionPointDisplayRect(for: selectedRange) != nil
+            )
         debugLogInsertionGeometryIfNeeded(sourceRect: sourceRect, resolvedRect: resolvedRect)
     }
 
@@ -686,7 +759,7 @@ final class EditorTextView: NSTextView {
             type: .standard,
             options: [.rangeNotRequired, .upstreamAffinity]
         ) { _, segmentFrame, _, _ in
-            result = self.caretRect(for: segmentFrame)
+            result = segmentFrame.standardized
             return false
         }
 
@@ -708,11 +781,30 @@ final class EditorTextView: NSTextView {
     }
 
     private func resolvedInsertionPointDisplayRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
+        if let appKitRect = appKitInsertionPointDisplayRect(for: nsRange) {
+            return resolvedInsertionPointRect(
+                from: appKitRect,
+                fallbackRect: appKitRect,
+                alignToSourceMidX: true
+            )
+        }
+
         let baseRect = insertionPointRect(for: nsRange, using: tlm)
             ?? insertionPointFallbackRect(for: nsRange, using: tlm)
         guard let baseRect else { return nil }
         let resolved = resolvedInsertionPointRect(from: baseRect, fallbackRect: baseRect)
         return displayRect(forTextContainerRect: resolved)
+    }
+
+    private func rawInsertionPointDisplayRect(for nsRange: NSRange, using tlm: NSTextLayoutManager) -> NSRect? {
+        if let appKitRect = appKitInsertionPointDisplayRect(for: nsRange) {
+            return appKitRect
+        }
+
+        let baseRect = insertionPointRect(for: nsRange, using: tlm)
+            ?? insertionPointFallbackRect(for: nsRange, using: tlm)
+        guard let baseRect else { return nil }
+        return displayRect(forTextContainerRect: baseRect)
     }
 
     private func intersection(_ lhs: NSRange, _ rhs: NSRange) -> NSRange? {
@@ -742,15 +834,6 @@ final class EditorTextView: NSTextView {
         displayRect.origin.x += origin.x
         displayRect.origin.y += origin.y
         return displayRect.standardized
-    }
-
-    private func caretRect(for segmentFrame: NSRect) -> NSRect {
-        return NSRect(
-            x: segmentFrame.minX,
-            y: segmentFrame.minY,
-            width: cursorWidth,
-            height: max(2, segmentFrame.height)
-        ).standardized
     }
 
     private func fontForCaret(at location: Int) -> NSFont {
@@ -843,6 +926,7 @@ final class EditorTextView: NSTextView {
 
         let insertionRect = insertionPointRect(for: selectedRange, using: tlm)
         let fallbackRect = insertionPointFallbackRect(for: selectedRange, using: tlm)
+        let appKitRect = appKitInsertionPointDisplayRect(for: selectedRange)
         guard insertionRect != nil || fallbackRect != nil || sourceRect != .zero else { return }
 
         let font = fontForCaret(at: selectedRange.location)
@@ -861,6 +945,7 @@ final class EditorTextView: NSTextView {
           cursorWidth=\(String(format: "%.2f", cursorWidth)) cursorHeightScale=\(String(format: "%.2f", cursorHeightScale))
           rawCaretHeight=\(String(format: "%.2f", rawHeight)) targetCaretHeight=\(String(format: "%.2f", targetHeight)) drawCaretHeight=\(String(format: "%.2f", drawHeight))
           sourceRect=\(NSStringFromRect(sourceRect))
+          appKitInsertionRect=\(appKitRect.map(NSStringFromRect) ?? "nil")
           insertionRect=\(insertionRect.map(NSStringFromRect) ?? "nil")
           fallbackRect=\(fallbackRect.map(NSStringFromRect) ?? "nil")
           resolvedCursorRect=\(NSStringFromRect(resolvedRect))
@@ -888,27 +973,11 @@ final class EditorTextView: NSTextView {
     }
 
     private func installCaretOverlayIfNeeded() {
-        guard let clipView = enclosingScrollView?.contentView else { return }
-
-        if caretHostView !== clipView {
-            removeCaretHostObserver()
-            caretHostView = clipView
-            clipView.postsBoundsChangedNotifications = true
-            caretHostBoundsObserver = NotificationCenter.default.addObserver(
-                forName: NSView.boundsDidChangeNotification,
-                object: clipView,
-                queue: .main
-            ) { [weak self] _ in
-                self?.caretOverlayView.frame = clipView.bounds
-                self?.updateCaretOverlay(resetBlink: false)
-            }
-        }
-
-        if caretOverlayView.superview !== clipView {
+        guard let hostView = superview else { return }
+        if caretOverlayView.superview !== hostView {
             caretOverlayView.removeFromSuperview()
-            caretOverlayView.frame = clipView.bounds
-            caretOverlayView.autoresizingMask = [.width, .height]
-            clipView.addSubview(caretOverlayView, positioned: .above, relativeTo: self)
+            caretOverlayView.frame = frame
+            hostView.addSubview(caretOverlayView, positioned: .below, relativeTo: self)
         }
     }
 
@@ -929,7 +998,6 @@ final class EditorTextView: NSTextView {
     }
 
     private func tearDownCaretInfrastructure() {
-        removeCaretHostObserver()
         removeWindowKeyObservers()
         stopCaretBlinkTimer()
         caretOverlayView.removeFromSuperview()
@@ -944,18 +1012,10 @@ final class EditorTextView: NSTextView {
         observedWindow = nil
     }
 
-    private func removeCaretHostObserver() {
-        if let caretHostBoundsObserver {
-            NotificationCenter.default.removeObserver(caretHostBoundsObserver)
-            self.caretHostBoundsObserver = nil
-        }
-        caretHostView = nil
-    }
-
     private func updateCaretOverlay(resetBlink: Bool) {
         installCaretInfrastructureIfNeeded()
         guard let tlm = textLayoutManager,
-              let clipView = caretOverlayView.superview else {
+              let hostView = caretOverlayView.superview else {
             caretOverlayView.hideImmediately()
             caretOverlayView.caretRect = .zero
             stopCaretBlinkTimer()
@@ -963,7 +1023,7 @@ final class EditorTextView: NSTextView {
         }
 
         caretOverlayView.caretColor = caretColor
-        caretOverlayView.frame = clipView.bounds
+        caretOverlayView.frame = hostView === self ? bounds : frame
 
         guard shouldShowCustomCaret,
               let selectedRange = selectedRanges.first?.rangeValue,
@@ -1049,6 +1109,296 @@ final class EditorTextView: NSTextView {
         lineTypographicBounds=\(NSStringFromRect(lineFragment.typographicBounds))
         glyphOrigin=\(NSStringFromPoint(lineFragment.glyphOrigin))
         """
+    }
+
+    private func captureAppKitInsertionPointRect(_ rect: NSRect) {
+        let selectedRange = selectedRange()
+        guard selectedRange.length == 0 else { return }
+
+        let standardizedRect = rect.standardized
+        let location = selectedRange.location
+        let didChange =
+            capturedAppKitInsertionPointRect != standardizedRect ||
+            capturedAppKitInsertionPointLocation != location
+
+        capturedAppKitInsertionPointRect = standardizedRect
+        capturedAppKitInsertionPointLocation = location
+
+        guard didChange else { return }
+        scheduleCaretOverlayUpdateFromCapturedAppKitRect()
+    }
+
+    private func appKitInsertionPointDisplayRect(for nsRange: NSRange) -> NSRect? {
+        guard nsRange.length == 0,
+              capturedAppKitInsertionPointLocation == nsRange.location,
+              let rect = capturedAppKitInsertionPointRect,
+              rect != .zero else {
+            return nil
+        }
+
+        return rect
+    }
+
+    private func invalidateCapturedAppKitInsertionPointRect() {
+        capturedAppKitInsertionPointRect = nil
+        capturedAppKitInsertionPointLocation = nil
+    }
+
+    private func invalidateCapturedAppKitInsertionPointRectIfNeeded(for ranges: [NSValue]) {
+        guard ranges.count == 1,
+              let selectedRange = ranges.first?.rangeValue,
+              selectedRange.length == 0,
+              capturedAppKitInsertionPointLocation == selectedRange.location else {
+            invalidateCapturedAppKitInsertionPointRect()
+            return
+        }
+    }
+
+    private func scheduleCaretOverlayUpdateFromCapturedAppKitRect() {
+        guard !isCaretOverlayUpdateScheduledFromAppKitRect else { return }
+        isCaretOverlayUpdateScheduledFromAppKitRect = true
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.isCaretOverlayUpdateScheduledFromAppKitRect = false
+            self.updateCaretOverlay(resetBlink: false)
+        }
+    }
+
+    private func prepareCaretDragStateIfNeeded(at localPoint: NSPoint) {
+        resetCaretDragState()
+
+        guard activePointerGestureStartedNearCaret,
+              let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager else {
+            return
+        }
+
+        let anchorRange = selectedRange()
+        guard anchorRange.length == 0,
+              let anchorLocation = tcm.location(tcm.documentRange.location, offsetBy: anchorRange.location) else {
+            return
+        }
+
+        caretDragStartPoint = localPoint
+        caretDragAnchorRange = anchorRange
+        caretDragAnchorLocation = anchorLocation
+
+        let point = pointInTextContainerCoordinates(localPoint)
+        let bounds = interactionBoundsInTextContainerCoordinates()
+        let anchorSelections = tlm.textSelectionNavigation.textSelections(
+            interactingAt: point,
+            inContainerAt: anchorLocation,
+            anchors: [],
+            modifiers: [],
+            selecting: false,
+            bounds: bounds
+        )
+
+        if anchorSelections.isEmpty {
+            caretDragAnchorSelections = [NSTextSelection(anchorLocation, affinity: .downstream)]
+        } else {
+            caretDragAnchorSelections = anchorSelections
+        }
+
+        debugLogCustomCaretDragIfNeeded("mouseDown.anchor", localPoint: localPoint, selections: caretDragAnchorSelections)
+    }
+
+    private func handleCustomCaretSelectionDragIfNeeded(at localPoint: NSPoint) -> Bool {
+        guard activePointerGestureStartedNearCaret,
+              let tlm = textLayoutManager,
+              let anchorRange = caretDragAnchorRange,
+              let anchorLocation = caretDragAnchorLocation,
+              let dragStartPoint = caretDragStartPoint,
+              !caretDragAnchorSelections.isEmpty else {
+            return false
+        }
+
+        let currentSelection = selectedRange()
+        if !isHandlingCustomCaretSelectionDrag {
+            let distance = hypot(localPoint.x - dragStartPoint.x, localPoint.y - dragStartPoint.y)
+            guard distance >= caretDragActivationDistance else { return false }
+
+            // If AppKit already started a native drag-selection, stay out of the way.
+            guard currentSelection == anchorRange else { return false }
+            isHandlingCustomCaretSelectionDrag = true
+        }
+
+        let point = pointInTextContainerCoordinates(localPoint)
+        let bounds = interactionBoundsInTextContainerCoordinates()
+        let selections = tlm.textSelectionNavigation.textSelections(
+            interactingAt: point,
+            inContainerAt: anchorLocation,
+            anchors: caretDragAnchorSelections,
+            modifiers: .extend,
+            selecting: true,
+            bounds: bounds
+        )
+
+        guard let rangeValues = nsValueRanges(from: selections), !rangeValues.isEmpty else {
+            return false
+        }
+
+        let affinity = selectionAffinity(for: selections.first)
+        debugLogCustomCaretDragIfNeeded("mouseDragged.apply", localPoint: localPoint, selections: selections)
+        setSelectedRanges(rangeValues, affinity: affinity, stillSelecting: true)
+        return true
+    }
+
+    private func resetCaretDragState() {
+        caretDragStartPoint = nil
+        caretDragAnchorRange = nil
+        caretDragAnchorSelections = []
+        caretDragAnchorLocation = nil
+        isHandlingCustomCaretSelectionDrag = false
+    }
+
+    private func pointInTextContainerCoordinates(_ point: NSPoint) -> NSPoint {
+        let origin = textContainerOrigin
+        return NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+    }
+
+    private func interactionBoundsInTextContainerCoordinates() -> NSRect {
+        visibleRect.offsetBy(dx: -textContainerOrigin.x, dy: -textContainerOrigin.y).standardized
+    }
+
+    private func nsValueRanges(from selections: [NSTextSelection]) -> [NSValue]? {
+        guard let tlm = textLayoutManager,
+              let tcm = tlm.textContentManager else {
+            return nil
+        }
+
+        let documentLocation = tcm.documentRange.location
+        let ranges = selections.flatMap { selection in
+            selection.textRanges.compactMap { textRange -> NSValue? in
+                let start = tcm.offset(from: documentLocation, to: textRange.location)
+                let end = tcm.offset(from: documentLocation, to: textRange.endLocation)
+                guard start != NSNotFound, end != NSNotFound else { return nil }
+                let lowerBound = min(start, end)
+                let upperBound = max(start, end)
+                return NSValue(range: NSRange(location: lowerBound, length: upperBound - lowerBound))
+            }
+        }
+
+        return ranges.isEmpty ? nil : ranges
+    }
+
+    private func selectionAffinity(for selection: NSTextSelection?) -> NSSelectionAffinity {
+        guard let selection else { return .downstream }
+        switch selection.affinity {
+        case .upstream:
+            return .upstream
+        case .downstream:
+            return .downstream
+        @unknown default:
+            return .downstream
+        }
+    }
+
+    private func overlayCaretRectInTextViewCoordinates() -> NSRect? {
+        guard caretOverlayView.superview != nil,
+              caretOverlayView.caretRect != .zero else {
+            return nil
+        }
+
+        return convert(caretOverlayView.caretRect, from: caretOverlayView).standardized
+    }
+
+    private func expandedCaretHitRect(_ rect: NSRect?) -> NSRect? {
+        guard let rect, rect != .zero else { return nil }
+        return rect.insetBy(dx: -caretPointerHitSlop, dy: -caretPointerHitSlop).standardized
+    }
+
+    private func shouldTrackPointerGesture(at localPoint: NSPoint) -> Bool {
+        let selectedRange = selectedRange()
+        guard selectedRange.length == 0 else { return false }
+
+        let appKitRect = appKitInsertionPointDisplayRect(for: selectedRange)
+        let overlayRect = overlayCaretRectInTextViewCoordinates()
+        let rawRect: NSRect?
+        if let tlm = textLayoutManager {
+            rawRect = rawInsertionPointDisplayRect(for: selectedRange, using: tlm)
+        } else {
+            rawRect = nil
+        }
+
+        let hitRects = [appKitRect, overlayRect, rawRect].compactMap(expandedCaretHitRect)
+        return hitRects.contains { $0.contains(localPoint) }
+    }
+
+    private func debugLogPointerEventIfNeeded(_ phase: String, event: NSEvent, localPoint: NSPoint) {
+        guard geometryLoggingEnabled else { return }
+
+        if phase.hasPrefix("mouseDown") || activePointerGestureStartedNearCaret {
+            let selectedRange = selectedRange()
+            let appKitRect = appKitInsertionPointDisplayRect(for: selectedRange)
+            let overlayRect = overlayCaretRectInTextViewCoordinates()
+            let rawRect: NSRect?
+            if let tlm = textLayoutManager {
+                rawRect = rawInsertionPointDisplayRect(for: selectedRange, using: tlm)
+            } else {
+                rawRect = nil
+            }
+
+            let appKitHitRect = expandedCaretHitRect(appKitRect)
+            let overlayHitRect = expandedCaretHitRect(overlayRect)
+            let rawHitRect = expandedCaretHitRect(rawRect)
+            let gestureID = activePointerGestureSequence ?? pointerGestureSequence
+
+            NSLog("""
+            [CaretDrag][Pointer]
+              gesture=\(gestureID) phase=\(phase) startedNearCaret=\(activePointerGestureStartedNearCaret)
+              type=\(event.type.rawValue) clickCount=\(event.clickCount) pressedMouseButtons=\(NSEvent.pressedMouseButtons)
+              point=\(NSStringFromPoint(localPoint)) delta={\(String(format: "%.2f", event.deltaX)), \(String(format: "%.2f", event.deltaY))}
+              selectedRange=\(NSStringFromRange(selectedRange))
+              appKitRect=\(appKitRect.map(NSStringFromRect) ?? "nil") hitRect=\(appKitHitRect.map(NSStringFromRect) ?? "nil") contains=\(appKitHitRect?.contains(localPoint) ?? false)
+              overlayRect=\(overlayRect.map(NSStringFromRect) ?? "nil") hitRect=\(overlayHitRect.map(NSStringFromRect) ?? "nil") contains=\(overlayHitRect?.contains(localPoint) ?? false)
+              rawRect=\(rawRect.map(NSStringFromRect) ?? "nil") hitRect=\(rawHitRect.map(NSStringFromRect) ?? "nil") contains=\(rawHitRect?.contains(localPoint) ?? false)
+            """)
+        }
+    }
+
+    private func debugLogSelectionChangeDuringPointerGestureIfNeeded(
+        ranges: [NSValue],
+        affinity: NSSelectionAffinity,
+        stillSelecting: Bool
+    ) {
+        guard geometryLoggingEnabled,
+              activePointerGestureSequence != nil || activePointerGestureStartedNearCaret else {
+            return
+        }
+
+        let rangeDescriptions = ranges.map { NSStringFromRange($0.rangeValue) }.joined(separator: ", ")
+        NSLog("""
+        [CaretDrag][SelectionChange]
+          gesture=\(activePointerGestureSequence ?? pointerGestureSequence) startedNearCaret=\(activePointerGestureStartedNearCaret)
+          stillSelecting=\(stillSelecting) affinity=\(affinity.rawValue)
+          ranges=[\(rangeDescriptions)]
+        """)
+    }
+
+    private func debugLogCustomCaretDragIfNeeded(_ phase: String, localPoint: NSPoint, selections: [NSTextSelection]?) {
+        guard geometryLoggingEnabled else { return }
+
+        let selectionDescriptions = selections?.map { selection -> String in
+            let ranges = selection.textRanges.compactMap { textRange -> String? in
+                guard let start = documentOffset(for: textRange.location),
+                      let end = documentOffset(for: textRange.endLocation) else {
+                    return nil
+                }
+                let lowerBound = min(start, end)
+                let upperBound = max(start, end)
+                return NSStringFromRange(NSRange(location: lowerBound, length: upperBound - lowerBound))
+            }.joined(separator: ", ")
+            return "{affinity=\(selection.affinity.rawValue) granularity=\(selection.granularity.rawValue) ranges=[\(ranges)] anchorOffset=\(String(format: "%.2f", selection.anchorPositionOffset))}"
+        }.joined(separator: " ") ?? "nil"
+
+        NSLog("""
+        [CaretDrag][Custom]
+          gesture=\(activePointerGestureSequence ?? pointerGestureSequence) phase=\(phase) active=\(isHandlingCustomCaretSelectionDrag)
+          localPoint=\(NSStringFromPoint(localPoint)) anchorRange=\(caretDragAnchorRange.map(NSStringFromRange) ?? "nil")
+          selections=\(selectionDescriptions)
+        """)
     }
 
 }

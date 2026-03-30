@@ -123,6 +123,7 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
         editor.isVerticallyResizable = true
         editor.isHorizontallyResizable = false
         editor.autoresizingMask = [.width]
+        editor.drawsBackground = false
         editor.backgroundColor = .textBackgroundColor
         editor.setCaretColor(.systemBlue)
         editor.textColor = .textColor

@@ -136,6 +136,11 @@ All highlighting must be incremental — only re-style the edited paragraph, nev
 - TextKit 2 makes the stock insertion-point path less trustworthy. An Apple Developer Forums thread from April 2025 reports `shouldDrawInsertionPoint` firing while `drawInsertionPoint` is never called, yet the default blinking insertion point still appears.
 - STTextView explicitly tracks this as `FB9713415` and avoids `NSTextView` baggage. CodeEditTextView follows the same high-level direction: custom editor rendering with an optional custom cursor view instead of leaning on the system caret.
 - Marco Polo conclusion: for a visibly short, thick, style-driven caret, stop negotiating with the stock AppKit insertion point. Keep using TextKit 2 for geometry, but render our own caret.
+- Real-world Marco Polo bug: a custom visible caret can break drag-to-select when the press begins exactly on the caret, especially in the middle of a line. End-of-line cases may still work, which makes the bug feel random.
+- The AppKit path is not reliable enough to rescue this on its own. In the failing case, `drawInsertionPoint(in:color:turnedOn:)` may never provide a usable insertion rect, and native drag selection may never begin even though the mouse press lands inside the visible caret.
+- Final working rule in Marco Polo: keep the custom caret purely visual most of the time, but if a drag starts on the visible caret and AppKit still has not started a selection after a tiny movement threshold, switch to a narrow TextKit 2 fallback using `NSTextSelectionNavigation.textSelections(interactingAt:inContainerAt:anchors:modifiers:selecting:bounds:)` with `.extend`.
+- Important constraint: only activate that fallback after real pointer movement and only if the selection is still collapsed at the original caret anchor. If AppKit has already started a native range selection, stay out of the way.
+- For future debugging, log the pointer point, visible caret rect, raw insertion rect, whether the drag started inside those rects, and the selection ranges emitted during drag. That made this issue diagnosable.
 
 ### Plan: Render Our Own Caret
 1. Create a tiny dedicated overlay view, preferably `EditorCaretView.swift`, whose only job is to draw and blink the caret. Keep selection drawing separate.
