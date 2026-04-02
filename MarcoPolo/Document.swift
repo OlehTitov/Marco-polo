@@ -314,7 +314,6 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
     func textDidChange(_ notification: Notification) {
         updateChangeCount(.changeDone)
         rebuildFenceTracker()
-        markdownStyling.clearHighlightCache()
         textView?.syncTypingAttributes()
         if isSidebarVisible, let text = textView?.string {
             outlineSidebar?.scheduleRebuild(from: text)
@@ -513,7 +512,6 @@ final class Document: NSDocument, NSTextViewDelegate, NSWindowDelegate, NSPopove
         let palette = prefs.themePalette(for: appearance)
 
         markdownStyling.currentAppearance = appearance
-        markdownStyling.updateThemeIfNeeded()
         textView.font = prefs.font
         textView.backgroundColor = palette.editorBackground
         textView.setCaretColor(prefs.caretColor(for: appearance))

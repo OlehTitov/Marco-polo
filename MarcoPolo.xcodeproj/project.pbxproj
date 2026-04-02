@@ -18,7 +18,6 @@
 		A0000000000000000000001A /* OutlineSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000105 /* OutlineSidebar.swift */; };
 		A0000000000000000000001B /* StatusBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000106 /* StatusBarView.swift */; };
 		A0000000000000000000001C /* MarkdownExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000107 /* MarkdownExporter.swift */; };
-		A0000000000000000000001D /* Highlightr in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000201 /* Highlightr */; };
 		A0000000000000000000001E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000108 /* Assets.xcassets */; };
 		A0000000000000000000001F /* HeadingGutterAnimator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000109 /* HeadingGutterAnimator.swift */; };
 		A00000000000000000000023 /* EditorAppearance.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000010A /* EditorAppearance.swift */; };
@@ -52,7 +51,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A0000000000000000000001D /* Highlightr in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -117,7 +115,6 @@
 			);
 			name = MarcoPolo;
 			packageProductDependencies = (
-				A00000000000000000000201 /* Highlightr */,
 			);
 			productName = MarcoPolo;
 			productReference = A00000000000000000000008 /* MarcoPolo.app */;
@@ -148,7 +145,6 @@
 			);
 			mainGroup = A00000000000000000000031;
 			packageReferences = (
-				A00000000000000000000200 /* XCRemoteSwiftPackageReference "Highlightr" */,
 			);
 			productRefGroup = A00000000000000000000033 /* Products */;
 			projectDirPath = "";
@@ -287,24 +283,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		A00000000000000000000200 /* XCRemoteSwiftPackageReference "Highlightr" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/raspu/Highlightr.git";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.2.1;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		A00000000000000000000201 /* Highlightr */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A00000000000000000000200 /* XCRemoteSwiftPackageReference "Highlightr" */;
-			productName = Highlightr;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = A00000000000000000000051 /* Project object */;
 }

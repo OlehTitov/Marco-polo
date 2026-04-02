@@ -2,6 +2,8 @@ import AppKit
 import QuartzCore
 
 private final class EditorCaretOverlayView: NSView {
+    private var visibilityAnimationID: UInt = 0
+
     var caretRect: NSRect = .zero {
         didSet {
             if oldValue != .zero {
@@ -75,12 +77,14 @@ private final class EditorCaretOverlayView: NSView {
     }
 
     func showImmediately() {
+        visibilityAnimationID &+= 1
         layer?.removeAllAnimations()
         isCaretVisible = true
         alphaValue = 1
     }
 
     func hideImmediately() {
+        visibilityAnimationID &+= 1
         layer?.removeAllAnimations()
         isCaretVisible = false
         alphaValue = 0
@@ -89,6 +93,8 @@ private final class EditorCaretOverlayView: NSView {
     func fadeOut(duration: TimeInterval) {
         guard isCaretVisible else { return }
 
+        visibilityAnimationID &+= 1
+        let animationID = visibilityAnimationID
         layer?.removeAllAnimations()
 
         NSAnimationContext.runAnimationGroup { context in
@@ -96,8 +102,9 @@ private final class EditorCaretOverlayView: NSView {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             animator().alphaValue = 0
         } completionHandler: { [weak self] in
-            self?.isCaretVisible = false
-            self?.alphaValue = 0
+            guard let self, self.visibilityAnimationID == animationID else { return }
+            self.isCaretVisible = false
+            self.alphaValue = 0
         }
     }
 }
@@ -131,8 +138,9 @@ final class EditorTextView: NSTextView {
     private let cursorWidth: CGFloat = 3
     private let cursorHeightScale: CGFloat = 1.4
     private let cursorAlpha: CGFloat = 0.78
-    private let cursorBlinkInterval: TimeInterval = 0.68
+    private let cursorVisibleDuration: TimeInterval = 0.68
     private let cursorFadeDuration: TimeInterval = 0.20
+    private let cursorInvisiblePauseDuration: TimeInterval = 0.14
     private let caretPointerHitSlop: CGFloat = 6
     private let caretDragActivationDistance: CGFloat = 2
 
@@ -268,142 +276,7 @@ final class EditorTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        drawCodeBlockBackgrounds(in: rect)
-        drawInlineCodeBackgrounds(in: rect)
         drawSelectionHighlights(in: rect)
-    }
-
-    private func drawCodeBlockBackgrounds(in dirtyRect: NSRect) {
-        guard let tracker = fencedCodeTracker,
-              !tracker.fenceRanges.isEmpty,
-              let tlm = textLayoutManager,
-              let tcm = tlm.textContentManager else { return }
-
-        // Use the viewport range to know which character offsets are accurately laid out.
-        // Fragments outside this range have estimated positions that are wrong.
-        guard let viewportRange = tlm.textViewportLayoutController.viewportRange else { return }
-        let vpStart = tcm.offset(from: tcm.documentRange.location, to: viewportRange.location)
-        let vpEnd = tcm.offset(from: tcm.documentRange.location, to: viewportRange.endLocation)
-        guard vpStart != NSNotFound, vpEnd != NSNotFound else { return }
-
-        let origin = textContainerOrigin
-        let textMargin = TextMetrics.textMargin(for: Preferences.shared.font)
-        let palette = Preferences.shared.themePalette(for: effectiveAppearance)
-        let bgColor = palette.codeBlockFill
-
-        for pair in tracker.fenceRanges {
-            guard let close = pair.close else { continue }
-
-            let startOffset = pair.open.location
-            let endOffset = NSMaxRange(close)
-            guard endOffset > startOffset else { continue }
-
-            // Skip code blocks entirely outside the viewport
-            guard startOffset < vpEnd && endOffset > vpStart else { continue }
-
-            // Clamp lookups to the viewport — fragments outside have estimated (wrong) positions.
-            let clampedStart = max(startOffset, vpStart)
-            let clampedEnd = min(endOffset - 1, vpEnd - 1)
-            guard clampedEnd >= clampedStart else { continue }
-
-            let docStart = tcm.documentRange.location
-            guard let startLoc = tcm.location(docStart, offsetBy: clampedStart),
-                  let endLoc = tcm.location(docStart, offsetBy: clampedEnd) else { continue }
-
-            guard let firstFrag = tlm.textLayoutFragment(for: startLoc),
-                  let lastFrag = tlm.textLayoutFragment(for: endLoc) else { continue }
-
-            var topY = firstFrag.layoutFragmentFrame.minY + origin.y
-            var bottomY = lastFrag.layoutFragmentFrame.maxY + origin.y
-
-            // If the code block extends beyond the viewport, stretch background to the
-            // edges of the dirty rect so it looks continuous off-screen.
-            let extendsAbove = startOffset < vpStart
-            let extendsBelow = endOffset > vpEnd
-            if extendsAbove { topY = dirtyRect.minY - 40 }
-            if extendsBelow { bottomY = dirtyRect.maxY + 40 }
-
-            guard bottomY > topY else { continue }
-
-            let vPad: CGFloat = 4
-            let containerWidth = textContainer?.size.width ?? bounds.width
-            let blockRect = NSRect(
-                x: origin.x + textMargin,
-                y: topY - vPad,
-                width: containerWidth - 2 * textMargin,
-                height: (bottomY - topY) + 2 * vPad
-            )
-
-            guard blockRect.intersects(dirtyRect) else { continue }
-
-            bgColor.setFill()
-            // When edges extend off-screen, the rounded corners at those edges are
-            // clipped anyway, so a uniform corner radius works fine.
-            NSBezierPath(roundedRect: blockRect, xRadius: 10, yRadius: 10).fill()
-        }
-    }
-
-    // MARK: - Inline code background
-
-    private func drawInlineCodeBackgrounds(in dirtyRect: NSRect) {
-        guard let tlm = textLayoutManager,
-              let tcm = tlm.textContentManager,
-              let ts = (tcm as? NSTextContentStorage)?.textStorage else { return }
-
-        guard let viewportRange = tlm.textViewportLayoutController.viewportRange else { return }
-        let docStart = tcm.documentRange.location
-        let vpStart = tcm.offset(from: docStart, to: viewportRange.location)
-        let vpEnd = tcm.offset(from: docStart, to: viewportRange.endLocation)
-        guard vpStart != NSNotFound, vpEnd != NSNotFound, vpEnd > vpStart else { return }
-
-        let str = ts.string as NSString
-        let vpNSRange = NSRange(location: vpStart, length: min(vpEnd - vpStart, str.length - vpStart))
-
-        let palette = Preferences.shared.themePalette(for: effectiveAppearance)
-        let bgColor = palette.inlineCodeFill
-
-        let origin = textContainerOrigin
-        let vExpand: CGFloat = 2
-        let hExpand: CGFloat = 3
-        let cornerRadius: CGFloat = 4
-
-        str.enumerateSubstrings(in: vpNSRange, options: .byParagraphs) { substring, substringRange, _, _ in
-            guard let substring else { return }
-
-            // Skip lines inside fenced code blocks
-            if let tracker = self.fencedCodeTracker,
-               tracker.isInsideFencedCode(paragraphLocation: substringRange.location) {
-                return
-            }
-            // Also skip fence lines themselves
-            let trimmed = substring.trimmingCharacters(in: .whitespaces)
-            if trimmed.hasPrefix("```") { return }
-
-            let localRange = NSRange(location: 0, length: (substring as NSString).length)
-            for match in MarkdownPatterns.inlineCode.matches(in: substring, range: localRange) {
-                let matchRange = match.range
-                let docRange = NSRange(location: substringRange.location + matchRange.location,
-                                       length: matchRange.length)
-
-                guard let startLoc = tcm.location(docStart, offsetBy: docRange.location),
-                      let endLoc = tcm.location(docStart, offsetBy: NSMaxRange(docRange)),
-                      let textRange = NSTextRange(location: startLoc, end: endLoc) else { continue }
-
-                tlm.enumerateTextSegments(in: textRange, type: .standard, options: []) { _, segmentFrame, _, _ in
-                    let rect = NSRect(
-                        x: segmentFrame.minX + origin.x - hExpand,
-                        y: segmentFrame.minY + origin.y - vExpand,
-                        width: segmentFrame.width + 2 * hExpand,
-                        height: segmentFrame.height + 2 * vExpand
-                    )
-                    if rect.intersects(dirtyRect) {
-                        bgColor.setFill()
-                        NSBezierPath(roundedRect: rect, xRadius: cornerRadius, yRadius: cornerRadius).fill()
-                    }
-                    return true
-                }
-            }
-        }
     }
 
     private func drawSelectionHighlights(in dirtyRect: NSRect) {
@@ -1067,17 +940,28 @@ final class EditorTextView: NSTextView {
 
         guard caretBlinkTimer == nil else { return }
 
-        let timer = Timer(timeInterval: cursorBlinkInterval, repeats: true) { [weak self] _ in
-            self?.toggleCaretBlink()
-        }
-        caretBlinkTimer = timer
-        RunLoop.main.add(timer, forMode: .common)
+        scheduleCaretBlinkTick(
+            after: isCaretBlinkOn
+                ? cursorVisibleDuration
+                : cursorFadeDuration + cursorInvisiblePauseDuration
+        )
     }
 
     private func stopCaretBlinkTimer() {
         caretBlinkTimer?.invalidate()
         caretBlinkTimer = nil
         isCaretBlinkOn = true
+    }
+
+    private func scheduleCaretBlinkTick(after delay: TimeInterval) {
+        caretBlinkTimer?.invalidate()
+
+        let timer = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            self?.caretBlinkTimer = nil
+            self?.toggleCaretBlink()
+        }
+        caretBlinkTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func toggleCaretBlink() {
@@ -1089,8 +973,10 @@ final class EditorTextView: NSTextView {
         isCaretBlinkOn.toggle()
         if isCaretBlinkOn {
             caretOverlayView.showImmediately()
+            scheduleCaretBlinkTick(after: cursorVisibleDuration)
         } else {
             caretOverlayView.fadeOut(duration: cursorFadeDuration)
+            scheduleCaretBlinkTick(after: cursorFadeDuration + cursorInvisiblePauseDuration)
         }
     }
 

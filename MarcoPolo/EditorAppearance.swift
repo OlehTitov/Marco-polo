@@ -98,8 +98,6 @@ struct EditorThemePalette {
     let statusBarBackground: NSColor
     let statusBarText: NSColor
     let separator: NSColor
-    let codeBlockFill: NSColor
-    let inlineCodeFill: NSColor
     let inlineCodeText: NSColor
     let fadeOverlayColor: NSColor
     let fadeOverlayOpacity: CGFloat
@@ -108,7 +106,6 @@ struct EditorThemePalette {
     let monogramActiveFill: NSColor
     let popoverLabelText: NSColor
     let popoverSecondaryText: NSColor
-    let codeThemeName: String
 }
 
 enum EditorTheme: String, CaseIterable {
@@ -155,8 +152,6 @@ enum EditorTheme: String, CaseIterable {
                 statusBarBackground: .windowBackgroundColor,
                 statusBarText: .secondaryLabelColor,
                 separator: .separatorColor,
-                codeBlockFill: .labelColor.withAlphaComponent(0.035),
-                inlineCodeFill: .labelColor.withAlphaComponent(0.07),
                 inlineCodeText: .systemOrange,
                 fadeOverlayColor: .textBackgroundColor,
                 fadeOverlayOpacity: 0.98,
@@ -164,8 +159,7 @@ enum EditorTheme: String, CaseIterable {
                 monogramHoverFill: .separatorColor.withAlphaComponent(0.10),
                 monogramActiveFill: .selectedContentBackgroundColor.withAlphaComponent(0.18),
                 popoverLabelText: .labelColor,
-                popoverSecondaryText: .secondaryLabelColor,
-                codeThemeName: "atom-one-light"
+                popoverSecondaryText: .secondaryLabelColor
             )
 
         case .paper:
@@ -194,17 +188,14 @@ enum EditorTheme: String, CaseIterable {
                 statusBarBackground: latteMantle,
                 statusBarText: latteSubtext1,
                 separator: latteCrust.withAlphaComponent(0.9),
-                codeBlockFill: latteSurface0.withAlphaComponent(0.24),
-                inlineCodeFill: latteSurface0.withAlphaComponent(0.38),
-                inlineCodeText: latteText,
+                inlineCodeText: .systemOrange,
                 fadeOverlayColor: latteBase,
                 fadeOverlayOpacity: 1.0,
                 monogramText: latteSubtext1,
                 monogramHoverFill: latteSurface0.withAlphaComponent(0.34),
                 monogramActiveFill: latteBlue.withAlphaComponent(0.18),
                 popoverLabelText: latteText,
-                popoverSecondaryText: latteSubtext1,
-                codeThemeName: "atom-one-light"
+                popoverSecondaryText: latteSubtext1
             )
 
         case .dark:
@@ -223,8 +214,6 @@ enum EditorTheme: String, CaseIterable {
                 statusBarBackground: .windowBackgroundColor,
                 statusBarText: .secondaryLabelColor,
                 separator: .separatorColor,
-                codeBlockFill: .labelColor.withAlphaComponent(0.07),
-                inlineCodeFill: .labelColor.withAlphaComponent(0.12),
                 inlineCodeText: .systemOrange,
                 fadeOverlayColor: .textBackgroundColor,
                 fadeOverlayOpacity: 1.0,
@@ -232,8 +221,7 @@ enum EditorTheme: String, CaseIterable {
                 monogramHoverFill: .separatorColor.withAlphaComponent(0.2),
                 monogramActiveFill: .selectedContentBackgroundColor.withAlphaComponent(0.38),
                 popoverLabelText: .labelColor,
-                popoverSecondaryText: .secondaryLabelColor,
-                codeThemeName: "atom-one-dark"
+                popoverSecondaryText: .secondaryLabelColor
             )
 
         case .calm:
@@ -261,17 +249,14 @@ enum EditorTheme: String, CaseIterable {
                 statusBarBackground: statusBarBackground,
                 statusBarText: darkSepia,
                 separator: paperBrown.withAlphaComponent(0.34),
-                codeBlockFill: cafeNoir.withAlphaComponent(0.05),
-                inlineCodeFill: paperBrown.withAlphaComponent(0.16),
-                inlineCodeText: sepiaInk,
+                inlineCodeText: .systemOrange,
                 fadeOverlayColor: parchment,
                 fadeOverlayOpacity: 1.0,
                 monogramText: darkSepia.withAlphaComponent(0.9),
                 monogramHoverFill: paperBrown.withAlphaComponent(0.14),
                 monogramActiveFill: paperBrown.withAlphaComponent(0.26),
                 popoverLabelText: cafeNoir,
-                popoverSecondaryText: darkSepia,
-                codeThemeName: "atom-one-light"
+                popoverSecondaryText: darkSepia
             )
 
         case .quiet:
@@ -298,17 +283,14 @@ enum EditorTheme: String, CaseIterable {
                 statusBarBackground: nord1,
                 statusBarText: nord4.withAlphaComponent(0.78),
                 separator: nord3.withAlphaComponent(0.56),
-                codeBlockFill: nord1.withAlphaComponent(0.52),
-                inlineCodeFill: nord1.withAlphaComponent(0.7),
-                inlineCodeText: nord5,
+                inlineCodeText: .systemOrange,
                 fadeOverlayColor: nord2,
                 fadeOverlayOpacity: 1.0,
                 monogramText: nord4.withAlphaComponent(0.86),
                 monogramHoverFill: nord3.withAlphaComponent(0.34),
                 monogramActiveFill: nord9.withAlphaComponent(0.34),
                 popoverLabelText: nord5,
-                popoverSecondaryText: nord4.withAlphaComponent(0.78),
-                codeThemeName: "atom-one-dark"
+                popoverSecondaryText: nord4.withAlphaComponent(0.78)
             )
         }
     }

@@ -1,5 +1,4 @@
 import AppKit
-import Highlightr
 
 enum EditorTypography {
     static let bodyLineHeightMultiple: CGFloat = 1.38
@@ -41,11 +40,6 @@ enum EditorTypography {
             style.headIndent = margin + blockIndent
             style.firstLineHeadIndent = margin + blockIndent
 
-        case .fencedCodeFence(_), .fencedCodeBody:
-            style.headIndent = margin + blockIndent
-            style.firstLineHeadIndent = margin + blockIndent
-            style.tailIndent = -(margin + blockIndent)
-
         case .orderedList(let indent), .unorderedList(let indent), .taskList(_, let indent):
             let nestingLevel = CGFloat(indent / 4)
             let extraIndent = blockIndent + (nestingLevel * blockIndent)
@@ -56,8 +50,9 @@ enum EditorTypography {
             style.paragraphSpacingBefore = 6
             style.paragraphSpacing = 6
 
-        case .plain:
+        case .fencedCodeFence(_), .fencedCodeBody, .plain:
             break
+
         }
 
         return style
@@ -144,44 +139,13 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
     var focusedParagraphLocation: Int?
     var currentAppearance: NSAppearance = NSApp.effectiveAppearance
 
-    // MARK: - Highlightr
-
-    private lazy var highlightr: Highlightr? = {
-        let h = Highlightr()
-        let theme = currentThemeName
-        h?.setTheme(to: theme)
-        self.appliedThemeName = theme
-        return h
-    }()
-
-    /// Cache keyed by open fence location → highlighted NSAttributedString of the full code block
-    private var highlightCache: [Int: NSAttributedString] = [:]
-    private var appliedThemeName: String?
-
-    private var currentThemeName: String {
-        prefs.themePalette(for: currentAppearance).codeThemeName
-    }
-
-    func clearHighlightCache() {
-        highlightCache.removeAll()
-    }
-
-    func updateThemeIfNeeded() {
-        let name = currentThemeName
-        guard name != appliedThemeName else { return }
-        highlightr?.setTheme(to: name)
-        appliedThemeName = name
-        clearHighlightCache()
-    }
-
     private var prefs: Preferences { Preferences.shared }
 
     func textContentStorage(
         _ textContentStorage: NSTextContentStorage,
         textParagraphWith range: NSRange
     ) -> NSTextParagraph? {
-        guard let textStorage = textContentStorage.textStorage,
-              let originalText = textStorage.attributedSubstring(from: range) as NSAttributedString? else {
+        guard let originalText = textContentStorage.textStorage?.attributedSubstring(from: range) as NSAttributedString? else {
             return nil
         }
 
@@ -204,15 +168,14 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
         ], range: fullRange)
 
         // Apply block-level style
-        applyBlockStyle(element, to: styled, fullRange: fullRange, font: font,
-                        documentRange: range, textStorage: textStorage, palette: palette)
+        applyBlockStyle(element, to: styled, fullRange: fullRange, palette: palette)
 
         // Apply inline styles (skip inside fenced code body)
         switch element {
         case .fencedCodeBody, .fencedCodeFence(_):
             break
         default:
-            applyInlineStyles(to: styled, line: line, fullRange: fullRange, font: font, palette: palette)
+            applyInlineStyles(to: styled, line: line, fullRange: fullRange, palette: palette)
         }
 
         // Focus mode dimming
@@ -244,9 +207,6 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
         _ element: MarkdownElement,
         to styled: NSMutableAttributedString,
         fullRange: NSRange,
-        font: NSFont,
-        documentRange: NSRange,
-        textStorage: NSTextStorage,
         palette: EditorThemePalette
     ) {
         switch element {
@@ -261,11 +221,10 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
             styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
 
         case .fencedCodeFence(_):
-            styled.addAttribute(.foregroundColor, value: palette.tertiaryText, range: fullRange)
+            styled.addAttribute(.foregroundColor, value: palette.inlineCodeText, range: fullRange)
 
         case .fencedCodeBody:
-            applyCodeHighlighting(to: styled, fullRange: fullRange, font: font,
-                                  documentRange: documentRange, textStorage: textStorage, palette: palette)
+            styled.addAttribute(.foregroundColor, value: palette.inlineCodeText, range: fullRange)
 
         case .orderedList, .unorderedList:
             break
@@ -286,78 +245,12 @@ final class MarkdownStyling: NSObject, NSTextContentStorageDelegate, NSTextLayou
         }
     }
 
-    // MARK: - Code block highlighting
-
-    private func applyCodeHighlighting(
-        to styled: NSMutableAttributedString,
-        fullRange: NSRange,
-        font: NSFont,
-        documentRange: NSRange,
-        textStorage: NSTextStorage,
-        palette: EditorThemePalette
-    ) {
-        guard let tracker = fencedCodeTracker,
-              let info = tracker.codeBlockInfo(forParagraphAt: documentRange.location),
-              info.codeRange.length > 0,
-              let highlightr else {
-            // Fall back to default grey
-            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
-            return
-        }
-
-        let cacheKey = info.openLocation
-
-        // Get or create cached highlighted string for the whole code block
-        if highlightCache[cacheKey] == nil {
-            let codeText = textStorage.attributedSubstring(from: info.codeRange).string
-            if let highlighted = highlightr.highlight(codeText, as: info.language) {
-                highlightCache[cacheKey] = highlighted
-            }
-        }
-
-        guard let cached = highlightCache[cacheKey] else {
-            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
-            return
-        }
-
-        // Compute this paragraph's offset within the code block
-        let offsetInBlock = documentRange.location - info.codeRange.location
-        let cachedString = cached.string as NSString
-        let cachedLength = cachedString.length
-
-        guard offsetInBlock >= 0, offsetInBlock < cachedLength else {
-            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
-            return
-        }
-
-        // The paragraph length in the cached string (may differ slightly due to trailing newline)
-        let availableLength = min(fullRange.length, cachedLength - offsetInBlock)
-        guard availableLength > 0 else {
-            styled.addAttribute(.foregroundColor, value: palette.secondaryText, range: fullRange)
-            return
-        }
-
-        let sourceRange = NSRange(location: offsetInBlock, length: availableLength)
-
-        // Copy foreground color attributes from the highlighted string
-        cached.enumerateAttribute(.foregroundColor, in: sourceRange) { value, attrRange, _ in
-            guard let color = value as? NSColor else { return }
-            let localRange = NSRange(location: attrRange.location - offsetInBlock, length: attrRange.length)
-            guard localRange.location >= 0, NSMaxRange(localRange) <= fullRange.length else { return }
-            styled.addAttribute(.foregroundColor, value: color, range: localRange)
-        }
-
-        // Override font to match our monospace preference
-        styled.addAttribute(.font, value: font, range: fullRange)
-    }
-
     // MARK: - Inline styling
 
     private func applyInlineStyles(
         to styled: NSMutableAttributedString,
         line: String,
         fullRange: NSRange,
-        font: NSFont,
         palette: EditorThemePalette
     ) {
         // Collect code span ranges to protect them from other patterns

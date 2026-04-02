@@ -392,8 +392,6 @@ final class CaretColorSwatchButton: NSButton {
             statusBarBackground: palette.statusBarBackground,
             statusBarText: palette.statusBarText,
             separator: palette.separator,
-            codeBlockFill: palette.codeBlockFill,
-            inlineCodeFill: palette.inlineCodeFill,
             inlineCodeText: palette.inlineCodeText,
             fadeOverlayColor: palette.fadeOverlayColor,
             fadeOverlayOpacity: palette.fadeOverlayOpacity,
@@ -401,8 +399,7 @@ final class CaretColorSwatchButton: NSButton {
             monogramHoverFill: palette.monogramHoverFill,
             monogramActiveFill: palette.monogramActiveFill,
             popoverLabelText: palette.popoverLabelText,
-            popoverSecondaryText: palette.popoverSecondaryText,
-            codeThemeName: palette.codeThemeName
+            popoverSecondaryText: palette.popoverSecondaryText
         )
     }
 }
